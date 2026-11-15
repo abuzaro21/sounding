@@ -1,6 +1,6 @@
 {
   "voice": "af_heart",
-  "speed": 1.08,
+  "speed": 1.12,
   "segments": [
     { "id": "intent", "text": "An agent is asked to remove inactive customer accounts. It expects to delete forty-eight rows." },
     { "id": "measure", "text": "SOUNDING runs that exact deletion in a transaction that can only roll back, and measures what really moved: two hundred and eighty-nine row changes in ten tables. Cascades, broken links, messages to outside providers." },

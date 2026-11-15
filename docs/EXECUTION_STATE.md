@@ -20,10 +20,10 @@ Status values: **PASS** (evidence linked and re-runnable), **OPEN** (not done), 
 | G12 | Concurrent execution and freshness safety | PASS | [CONCURRENCY](CONCURRENCY.md); `test/races.test.ts` (9 tests); eval 40/40 replays and 40/40 concurrent duplicates refused, 0 double executions |
 | G13 | Real failure-test evidence | PASS | [FAILURE-TEST](FAILURE-TEST.md); eval 25/25 drifts caught, 0 false-safe commits |
 | G14 | Security and session isolation | PASS | [SECURITY](SECURITY.md); `test/http.test.ts`, `test/net.test.ts`, RLS on business and control tables. Accepted risk: single DB role (ADR-007) |
-| G15 | Polished browser UX and accessibility | PASS | Playwright desktop 1440×1000 and Pixel 7, 6/6; screenshots in [evidence/screens/](evidence/screens/) |
-| G16 | CI, clean clone, audit and Docker verification | OPEN | Local: typecheck, build, 52/52 tests, eval reproduced, e2e 6/6, `npm audit` 0 vulnerabilities, Docker smoke 18/18 (2026-11-15). Open: green GitHub Actions run on the public repo; clean-clone run |
+| G15 | Polished browser UX and accessibility | PASS | Playwright desktop 1440×1000 and Pixel 7, 6/6; screenshots in [evidence/screens/](evidence/screens/), embedded in the README with a recorded demo clip |
+| G16 | CI, clean clone, audit and Docker verification | OPEN | Local: typecheck, build, 55/55 tests, eval reproduced, e2e 6/6, `npm audit` 0 vulnerabilities, Docker smoke 18/18 (2026-11-15). Open: green GitHub Actions run on the public repo; clean-clone run |
 | G17 | Live deployment and restart testing | OWNER | Needs a Render workspace that holds no other application ([DEPLOY](DEPLOY.md#status)) |
-| G18 | Finished 90-second film | OPEN | |
+| G18 | Finished 90-second film | PASS (machine checks) · OWNER (human review) | 89.9 s, 1920×1080, 30 fps, H.264/AAC, −16.4 LUFS, Kokoro narration, 41 burned-in captions plus SRT, real Playwright footage, logo animation. 10/10 automated checks, Whisper word error rate 0.5 %: [evidence/film-verification.json](evidence/film-verification.json). Built by `film/capture.ts`, `film/assemble.ts`, checked by `film/verify.py`. SHA-256 `631d5f4e…5f4b`. **No person has watched or listened to it yet.** Attached to the release, not committed |
 | G19 | Release and submission-ready package | OPEN | [SUBMISSION](SUBMISSION.md) |
 
 ## Codex reviews

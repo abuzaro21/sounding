@@ -1,9 +1,9 @@
 // Shared by capture and assembly: where each scene and narration segment sits in the film.
 import { readFileSync } from 'node:fs';
 
-export const TOTAL = 89.6, LEAD = 0.4, GAP = 0.5, TAIL = 0.5;
-/** Extra seconds after a scene's narration: the restore's real execution takes longer than its narration (taken from the end card's slack). */
-const HOLD: Record<string, number> = { restore: 1.8 };
+export const TOTAL = 89.9, LEAD = 0.4, GAP = 0.5, TAIL = 0.5;
+/** Extra seconds after a scene's narration: real simulations and executions take longer than their narration (taken from the end card's slack). */
+const HOLD: Record<string, number> = { commit: 2.3, restore: 1.8 };
 export const SCENES = ['intent', 'measure', 'blocked', 'approve', 'drift', 'rollback', 'commit', 'restore', 'evidence', 'end'].map((id) => ({ id, segs: [id] }));
 
 export type Scene = { id: string; start: number; len: number; segs: { id: string; at: number; d: number }[] };

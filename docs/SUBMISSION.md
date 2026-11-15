@@ -14,7 +14,7 @@ Status: **not submitted.** The owner fills in and sends the DOO form. Only the f
 | Repository | _pending: github.com/abuzaro21/sounding_ |
 | Release | _pending: v1.0.0_ |
 | Live demo | _pending: see [DEPLOY](DEPLOY.md#status)_ |
-| Video (YouTube, Unlisted) | _pending: owner uploads `sounding-film.mp4` from the v1.0.0 release_ |
+| Video (YouTube, Unlisted) | _pending: owner uploads `sounding-film.mp4` from the v1.0.0 release (SHA-256 `631d5f4e4a379a7cc490bb4ca54c3e64ef208e971d20d99461bcbf99169c5f4b`)_ |
 | Thesis | [THESIS.md](THESIS.md) (≤ 300 words) |
 | AI disclosure | [AI-DISCLOSURE.md](AI-DISCLOSURE.md) |
 

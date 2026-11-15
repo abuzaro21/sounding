@@ -1,0 +1,55 @@
+{
+ "file": "film/out/sounding-film.mp4",
+ "bytes": 31506073,
+ "duration_s": 89.9,
+ "video": {
+  "codec_name": "h264",
+  "profile": "High",
+  "width": 1920,
+  "height": 1080,
+  "r_frame_rate": "30/1",
+  "pix_fmt": "yuv420p",
+  "nb_read_frames": "2696",
+  "color_range": "tv"
+ },
+ "audio": {
+  "codec_name": "aac",
+  "sample_rate": "48000",
+  "channels": 2
+ },
+ "integrated_loudness_lufs": -16.4,
+ "captions": {
+  "cues": 41,
+  "first": [
+   0.32,
+   2.79
+  ],
+  "last": [
+   86.695,
+   89.065
+  ]
+ },
+ "end_card": {
+  "teal_pixels": 3936,
+  "light_pixels": 34906
+ },
+ "first_frame_mean": 0.0,
+ "whisper_small_en": {
+  "word_error_rate": 0.005,
+  "heard": "An agent is asked to remove inactive customer accounts. It expects to delete 48 rows. Sounding runs that exact deletion in a transaction that can only roll back and measures what really moved. 289 row changes in 10 tables. Cascades, broken links, messages to outside providers. Policy blocks it. Unpaid invoices, live subscriptions, records the law says to keep. The agent narrows its own plan from that evidence and simulates again. Now it's safe. Approval isn't a yes button. It signs this exact set of effects with a one-time token that expires in five minutes. Then the world moves. A customer phones in an order and I execute anyway. The verifier finds three changes nobody approved. It rolls back before commit and proves that every row it touched is intact. Write again on what is true now. Narrow approve execute, committed and every check verified. Even the undo goes through the same gate. Cued messages are canceled for real. Anything already sent is admitted, not hidden. Across 40 seeded scenarios, every committed effect predicted exactly 25 of 25 drifts caught, zero unsafe commits. Sounding, see the consequences before they become real."
+ },
+ "checks": {
+  "duration_89_to_90_s": true,
+  "resolution_1920x1080": true,
+  "fps_30": true,
+  "h264_yuv420p": true,
+  "aac_audio": true,
+  "decodes_without_errors": true,
+  "srt_well_formed": true,
+  "loudness_near_-16_lufs": true,
+  "narration_matches_script_wer_under_10pct": true,
+  "logo_visible_on_end_card": true
+ },
+ "all_passed": true,
+ "not_checked": "No person has watched or listened to this file as part of these checks."
+}

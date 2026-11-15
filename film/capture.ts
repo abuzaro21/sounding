@@ -89,7 +89,8 @@ class Rec {
 
 // ---------- cards ----------
 const assets = readdirSync('public/assets');
-const font = (re: RegExp) => `${BASE}/assets/${assets.find((f) => re.test(f))}`;
+// Inlined: a card is set on about:blank, which cannot load fonts from the server's origin.
+const font = (re: RegExp) => `data:font/woff2;base64,${readFileSync(`public/assets/${assets.find((f) => re.test(f))}`).toString('base64')}`;
 const FONTS = `@font-face { font-family: Plex; src: url(${font(/ibm-plex-sans-latin-400-normal/)}) format('woff2'); font-weight: 400; }
 @font-face { font-family: Plex; src: url(${font(/ibm-plex-sans-latin-600-normal/)}) format('woff2'); font-weight: 600; }
 @font-face { font-family: PlexMono; src: url(${font(/ibm-plex-mono-latin-400-normal/)}) format('woff2'); }`;
@@ -109,9 +110,9 @@ function evidenceCard() {
 html, body { margin: 0; height: 100%; overflow: hidden; } body { ${SEA} font-family: Plex, sans-serif; display: grid; align-content: center; padding: 0 120px; box-sizing: border-box; }
 .eyebrow { font-family: PlexMono; font-size: 17px; letter-spacing: .12em; text-transform: uppercase; color: #a9c3c8; margin: 0 0 14px; animation: in .6s ease-out both; }
 h1 { font-weight: 600; font-size: 46px; margin: 0 0 54px; letter-spacing: -.01em; animation: in .6s .15s ease-out both; }
-.rows { display: grid; gap: 30px; } .row { display: grid; grid-template-columns: 300px 1fr; align-items: baseline; gap: 36px; opacity: 0; animation: in .55s ease-out both; }
+.rows { display: grid; gap: 30px; } .row { display: grid; grid-template-columns: 340px 1fr; align-items: baseline; gap: 36px; opacity: 0; animation: in .55s ease-out both; }
 .row:nth-child(1) { animation-delay: .9s } .row:nth-child(2) { animation-delay: 3.0s } .row:nth-child(3) { animation-delay: 5.4s }
-.n { font-family: PlexMono; font-size: 64px; color: #6fc3b8; text-align: right; } .l { font-size: 30px; font-weight: 600; } .d { display: block; font-family: PlexMono; font-size: 17px; color: #a9c3c8; margin-top: 6px; font-weight: 400; }
+.n { font-family: PlexMono; font-size: 64px; color: #6fc3b8; text-align: right; white-space: nowrap; letter-spacing: -0.04em; } .l { font-size: 30px; font-weight: 600; } .d { display: block; font-family: PlexMono; font-size: 17px; color: #a9c3c8; margin-top: 6px; font-weight: 400; }
 .src { position: absolute; left: 120px; bottom: 120px; font-family: PlexMono; font-size: 15px; color: #a9c3c8; opacity: 0; animation: in .6s 6.4s ease-out both; }
 @keyframes in { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: none } }
 </style></head><body><p class="eyebrow">Measured, not claimed</p><h1>${e.seeds} seeded scenarios against real PostgreSQL</h1>
@@ -189,7 +190,7 @@ try {
   await S('drift', 0.3); await scrollTo(page, page.getByRole('button', { name: /phones in an order/ }), 520, 800);
   await S('drift', 1.4); await click(page, page.getByRole('button', { name: /phones in an order/ }), 600);
   await page.getByText(/just phoned in an order/).waitFor();
-  await S('drift', 4.0); await click(page, page.getByRole('button', { name: 'Execute' }), 700);
+  await S('drift', 2.8); await click(page, page.getByRole('button', { name: 'Execute' }), 600);
   const dialog = page.getByRole('dialog');
   await dialog.waitFor();
   await S('drift', 6.4); await hover(page, dialog.getByText('Not in what you approved'), 600);
@@ -198,12 +199,12 @@ try {
   await S('rollback', 0.6); await hover(page, dialog.getByText(/Rolled back before commit/), 700);
 
   // 7. Re-simulate on current data, narrow, approve, execute.
-  await S('commit', 0.1); await click(page, dialog.getByRole('button', { name: 'Simulate again on current data' }), 400);
+  await S('commit', 0.1); await click(page, dialog.getByRole('button', { name: 'Simulate again on current data' }), 300);
   await verdict(/Blocked/).waitFor();
-  await click(page, page.getByRole('button', { name: 'Let the agent narrow it' }), 400);
+  await click(page, page.getByRole('button', { name: 'Let the agent narrow it' }), 300);
   await verdict(/Safe to approve/).waitFor();
-  await click(page, page.getByRole('button', { name: /^Approve \d+ changes$/ }), 400);
-  await click(page, page.getByRole('button', { name: 'Execute' }), 400);
+  await click(page, page.getByRole('button', { name: /^Approve \d+ changes$/ }), 300);
+  await click(page, page.getByRole('button', { name: 'Execute' }), 300);
   await page.getByRole('heading', { name: 'Committed and verified' }).waitFor();
   await scrollTo(page, page.getByRole('heading', { name: 'Committed and verified' }), 90, 700);
 

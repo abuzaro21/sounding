@@ -10,6 +10,10 @@ INTENT → SIMULATE → MEASURE CONSEQUENCES → REVIEW → APPROVE / MODIFY / R
 
 Built for the DOO Builders League challenge "Simulate before you act".
 
+![Recorded demo: a customer phones in an order after approval; execution finds 3 changes nobody approved and rolls back before commit](docs/evidence/demo-drift-rollback.gif)
+
+*Recorded from the real app (14 s, captions burned in). The full 90-second film, `sounding-film.mp4`, with its SRT is attached to the [v1.0.0 release](../../releases/tag/v1.0.0).*
+
 ## What you see in the demo
 
 Every visitor gets an isolated synthetic copy of *Larkspur Outfitters*, a fictional outdoor-gear shop with 13 business tables. Nothing in it is real.
@@ -23,7 +27,13 @@ Every visitor gets an isolated synthetic copy of *Larkspur Outfitters*, a fictio
 7. **Re-simulate, narrow, commit.** The receipt lists every check, the pre- and post-state digests, and the effect count.
 8. **Restore.** The compensating restoration goes through the same gate: it is simulated, approved and verified. Queued messages are cancelled for real. Delivered ones get a compensating message, and the receipt says that they could not be unsent.
 
-Screens: [`docs/evidence/screens/`](docs/evidence/screens/).
+| Blocked: what the dry run really measured | Approved, then reality moves |
+|---|---|
+| ![Blocked plan with the measured impact graph and policy findings](docs/evidence/screens/desktop-1-blocked.png) | ![Approval binding with the drift buttons](docs/evidence/screens/desktop-2-approved-drift.png) |
+| **Rolled back before commit** | **Committed and verified** |
+| ![The verifier stopped the execution inside the transaction](docs/evidence/screens/desktop-3-incident.png) | ![Receipt with every check passed](docs/evidence/screens/desktop-4-committed.png) |
+
+More, including phone-width captures: [`docs/evidence/screens/`](docs/evidence/screens/).
 
 ## Measured, not claimed
 
