@@ -1,0 +1,39 @@
+{
+  "name": "sounding",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SOUNDING: simulation-gated bulk data changes. An agent's proposed mutation is dry-run inside a rollback-only PostgreSQL transaction, every direct and indirect row change is measured, unsafe plans are blocked and narrowed, and only a fresh, human-approved, exactly-bound action executes, with an in-transaction verifier that rolls back anything the simulation did not predict.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.13.0 <25"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "dev:ui": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.ts\"",
+    "test:e2e": "playwright test",
+    "eval": "node scripts/eval.ts",
+    "db:up": "docker compose up -d --wait db",
+    "ci": "bash scripts/ci.sh"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.4"
+  }
+}
