@@ -9,6 +9,9 @@ export const TABLES = [
 ] as const;
 export type Table = (typeof TABLES)[number];
 
+/** Bookkeeping tables. Row-level secured like the business tables; they must carry no triggers (see schemaFingerprint). */
+export const CONTROL = ['deliveries', 'change_log', 'actions', 'simulations', 'approvals', 'executions', 'audit'] as const;
+
 /** Columns whose value legitimately differs between two runs of the same action (clock-derived). Excluded from effect digests. */
 export const VOLATILE: Partial<Record<Table, string[]>> = {
   orders: ['updated_at'], support_cases: ['updated_at'], outbox: ['created_at', 'dispatched_at'], ledger_entries: ['created_at'],
@@ -144,28 +147,38 @@ create table if not exists change_log (
 create table if not exists actions (
   id text primary key, workspace_id text not null references workspaces(id) on delete cascade,
   parent_id text, origin text not null, intent text not null, spec jsonb not null, spec_hash text not null,
-  expectation jsonb not null, rationale text, status text not null default 'proposed', created_at timestamptz not null default now()
+  expectation jsonb not null, rationale text, status text not null default 'proposed', created_at timestamptz not null default now(),
+  unique (workspace_id, id)
 );
+-- Control-plane references are tenant-qualified, like the business tables: a record can only point within its workspace.
 create table if not exists simulations (
   id text primary key, workspace_id text not null references workspaces(id) on delete cascade,
-  action_id text not null references actions(id) on delete cascade, spec_hash text not null,
+  action_id text not null, spec_hash text not null,
   schema_fp text not null, row_versions jsonb not null, effects jsonb not null, effect_digest text not null,
-  report jsonb not null, verdict text not null, durable jsonb not null, created_at timestamptz not null default now()
+  report jsonb not null, verdict text not null, durable jsonb not null, created_at timestamptz not null default now(),
+  unique (workspace_id, id),
+  foreign key (workspace_id, action_id) references actions(workspace_id, id) on delete cascade
 );
 create table if not exists approvals (
   id text primary key, workspace_id text not null references workspaces(id) on delete cascade,
-  simulation_id text not null references simulations(id) on delete cascade, operator text not null,
+  simulation_id text not null, operator text not null,
   binding jsonb not null, binding_hash text not null, nonce text not null unique,
   status text not null check (status in ('approved','executing','consumed','failed','rejected')),
-  expires_at timestamptz not null, created_at timestamptz not null default now(), outcome text
+  expires_at timestamptz not null, created_at timestamptz not null default now(), outcome text,
+  unique (workspace_id, id),
+  foreign key (workspace_id, simulation_id) references simulations(workspace_id, id) on delete cascade
 );
 create unique index if not exists approvals_one_live on approvals(simulation_id) where status in ('approved','executing','consumed');
 create table if not exists executions (
   id text primary key, workspace_id text not null references workspaces(id) on delete cascade,
-  approval_id text not null references approvals(id) on delete cascade, simulation_id text not null, action_id text not null,
+  approval_id text not null unique, simulation_id text not null, action_id text not null,
   status text not null check (status in ('committed','rolled_back','refused')),
   receipt jsonb not null, recovery jsonb, recovery_status text, recovery_expires_at timestamptz,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- One terminal receipt per approval: two processes cannot both record an outcome for it.
+  foreign key (workspace_id, approval_id) references approvals(workspace_id, id) on delete cascade,
+  foreign key (workspace_id, simulation_id) references simulations(workspace_id, id) on delete cascade,
+  foreign key (workspace_id, action_id) references actions(workspace_id, id) on delete cascade
 );
 create table if not exists audit (
   workspace_id text not null references workspaces(id) on delete cascade, seq int not null,
@@ -253,8 +266,10 @@ begin
     select coalesce(sum(p.amount_cents), 0) into paid from payments p join invoices i on i.workspace_id = p.workspace_id and i.id = p.invoice_id
       where i.workspace_id = new.workspace_id and i.order_id = new.id;
     update invoices set status = 'void' where workspace_id = new.workspace_id and order_id = new.id and status = 'open';
+    -- Aggregate first: UPDATE ... FROM applies only one matching line per product, so two lines of one product would release one.
     update products p set reserved = p.reserved - l.qty
-      from order_lines l where l.workspace_id = new.workspace_id and l.order_id = new.id and p.workspace_id = l.workspace_id and p.id = l.product_id;
+      from (select product_id, sum(qty)::int as qty from order_lines where workspace_id = new.workspace_id and order_id = new.id group by product_id) l
+      where p.workspace_id = new.workspace_id and p.id = l.product_id;
     update shipments set status = 'voided' where workspace_id = new.workspace_id and order_id = new.id and status = 'pending';
     if paid > 0 then
       perform snd_emit(new.workspace_id, 'payments.refund.request', new.id, jsonb_build_object('order', new.id, 'amount_cents', paid));
@@ -281,7 +296,12 @@ create trigger order_touch before update on orders for each row execute function
 drop trigger if exists order_cancelled on orders;
 create trigger order_cancelled after update on orders for each row execute function snd_order_cancelled();
 
-${[...TABLES, 'deliveries', 'change_log'].map(RLS).join(';\n')};
+${[...TABLES, ...CONTROL].map(RLS).join(';\n')};
+alter table workspaces enable row level security;
+alter table workspaces force row level security;
+drop policy if exists ws_isolation on workspaces;
+create policy ws_isolation on workspaces using (id = current_setting('snd.ws', true) or current_setting('snd.ws', true) = '*')
+  with check (id = current_setting('snd.ws', true) or current_setting('snd.ws', true) = '*');
 ${TABLES.map(CAPTURE).join(';\n')};
 `;
 

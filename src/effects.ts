@@ -74,7 +74,7 @@ export function summarize(effects: Effect[]) {
     const s = (by[e.tbl] ??= { deleted: 0, updated: 0, inserted: 0 });
     if (e.op === 'DELETE') s.deleted++; else if (e.op === 'UPDATE') s.updated++; else s.inserted++;
   }
-  const causes = { direct: 0, cascade: 0, set_null: 0, trigger: 0 } as Record<Cause, number>;
+  const causes: Record<Cause, number> = { direct: 0, cascade: 0, set_null: 0, trigger: 0, restore: 0 };
   for (const e of effects) causes[e.cause]++;
   return { tables: by, causes, total: effects.length };
 }

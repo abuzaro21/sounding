@@ -112,17 +112,20 @@ export const RESTORE = {
     for (const x of p.inserts) {
       const id = String(x.new_row!.id), cur = await current(x.tbl, id);
       if (!cur) { ctx.conflicts.push({ tbl: x.tbl, id, reason: 'deleted since' }); continue; }
-      if (x.tbl === 'outbox') { outbox.push({ row: x.new_row!, cur }); if (cur.status === 'dispatched') ctx.irreversible.push({ id, topic: String(cur.topic) }); }
+      if (x.tbl === 'outbox') {
+        // Only the dispatcher's status transition is expected; any other change to the message is a conflict (Codex R6-11).
+        const content = (r: Row) => canonical({ ...stable('outbox', r), status: undefined });
+        if (content(cur) !== content(x.new_row!)) { ctx.conflicts.push({ tbl: 'outbox', id, reason: 'message changed since' }); continue; }
+        outbox.push({ row: x.new_row!, cur }); if (cur.status === 'dispatched') ctx.irreversible.push({ id, topic: String(cur.topic) });
+      }
       else if (canonical(stable(tableOf(x.tbl), cur)) !== canonical(stable(tableOf(x.tbl), x.new_row))) ctx.conflicts.push({ tbl: x.tbl, id, reason: 'changed since' });
     }
     if (ctx.conflicts.length) return { restore: ctx };
-    // 2. Re-insert deleted rows parent-first; customers that referred one another go referrer-first.
-    const pending = [...p.deletes];
-    while (pending.length) {
-      const ids = new Set(pending.filter((d) => d.tbl === 'customers').map((d) => String(d.old_row!.id)));
-      const i = pending.findIndex((d) => d.tbl !== 'customers' || !ids.has(String(d.old_row!.referred_by)) || d.old_row!.referred_by === d.old_row!.id);
-      const d = pending.splice(i === -1 ? 0 : i, 1)[0];
-      await q(`insert into ${tableOf(d.tbl)} select * from jsonb_populate_record(null::${tableOf(d.tbl)}, $1::jsonb)`, [JSON.stringify(d.old_row)]);
+    // 2. Re-insert deleted rows parent-first, one statement per table: an immediate FK is checked at the end of the
+    //    statement, so customers that referred one another, even in a cycle, go back together (Codex R6-9).
+    for (const t of TABLES) {
+      const rows = p.deletes.filter((d) => d.tbl === t).map((d) => d.old_row);
+      if (rows.length) await q(`insert into ${t} select * from jsonb_populate_recordset(null::${t}, $1::jsonb)`, [JSON.stringify(rows)]);
     }
     // 3. Put updated rows back to their first before-image.
     for (const u of p.updates) {

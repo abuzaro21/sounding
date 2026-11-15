@@ -1,0 +1,12 @@
+You are an independent adversarial code reviewer for SOUNDING, a simulation-gated bulk data change system (Node 24 native TypeScript, PostgreSQL 16, React). The repository is the current directory, at git commit 42faa18. You are in a READ-ONLY sandbox: read any file, run read-only commands such as git show/grep, but do not modify files and do not attempt network or database access. Read docs/reviews/ARCH-B-codex.md for the intended design.
+
+Report only defects you have verified by reading the code: correctness, safety and security bugs, false claims, and missing tests for claims the code makes. No style nits, no praise. For each finding give: severity (critical/high/medium/low), file:line, the defect in one sentence, a concrete failure scenario (inputs/state -> wrong result), and the smallest fix. Rank most severe first, at most 12 findings. Then a short section "Verified sound" listing the specific properties you checked and found correct, so the record shows coverage. Plain markdown, at most 1500 words.
+
+SCOPE: review areas R2 (simulator), R3 (side effects) and R8 (failure injection).
+Files: src/engine.ts (simulate, #runner, rowVersions, stateDigest, drift, dispatch), src/db.ts, src/schema.ts (capture trigger, snd_* functions, DDL), src/effects.ts, src/templates.ts, src/policy.ts, scripts/eval.ts, test/simulate.test.ts, test/execute.test.ts, test/property.test.ts.
+Questions to answer with evidence:
+1. Does the dry run execute exactly the same mutation code as execution? Is anything measured differently between the two?
+2. Can any write escape the capture journal (tables without the trigger, TRUNCATE, writes before capture is enabled, deferred constraint triggers, trigger ordering so zzz_capture misses later trigger writes, statement-level effects, sequences)?
+3. Can anything durable survive the simulation rollback (outbox, deliveries, change_log, audit, advisory locks, sequences, settings)? Is the "durable unchanged" proof itself sound, or could it pass while something persisted?
+4. Is effect comparison exact? Could two different effect sets share a digest (canonicalisation, volatile column exclusion hiding a real difference, duplicate keys)?
+5. Are the under-prediction failure tests honest: does the safety net catch something the earlier checks could not see, without the test rigging the outcome? Is any eval number computed in a way that overstates the result?

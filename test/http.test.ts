@@ -80,6 +80,11 @@ test('the whole gate works over HTTP, and personal data is masked in the respons
   assert.equal((await api('POST', `/api/approvals/${apr.body.id}/execute`, cookie, { nonce: apr.body.nonce })).status, 409, 'no replay');
   const state = await api('GET', '/api/state', cookie);
   assert.equal(state.body.executions[0].status, 'committed');
+  // Messages the purge queued carry the erased customer's e-mail in their payload; reading them back masks it (Codex R7-9).
+  const ids = (state.body.outbox as { id: string; topic: string }[]).filter((m) => m.topic === 'crm.contact.erase').map((m) => m.id).slice(0, 5);
+  assert.ok(ids.length > 0);
+  const recs = (await api('GET', `/api/records?table=outbox&ids=${ids.join(',')}`, cookie)).body as unknown as { payload: { email?: string } }[];
+  assert.ok(recs.length > 0 && recs.every((r) => typeof r.payload.email === 'string' && /^[^@]{0,2}\*\*\*@/.test(r.payload.email)), JSON.stringify(recs[0]));
 });
 
 test('another session cannot read or act on this workspace', async () => {

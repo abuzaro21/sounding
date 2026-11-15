@@ -5,7 +5,7 @@ import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { HttpError, mask, type Engine } from './engine.ts';
+import { HttpError, maskRow, type Engine } from './engine.ts';
 import { Limiter, clientIp } from './net.ts';
 import { EXAMPLES } from './agent.ts';
 import { POLICY_VERSION, ruleText, type Rule } from './policy.ts';
@@ -28,14 +28,7 @@ const tokenHash = (t: string) => createHash('sha256').update(t).digest('hex');
 const operatorOf = (t: string) => `operator:${tokenHash(`op|${t}`).slice(0, 10)}`;
 
 function maskEffect(e: Effect): Effect {
-  const m = (r?: Row) => {
-    if (!r) return r;
-    const out = { ...r };
-    if (typeof out.email === 'string') out.email = mask(out.email);
-    if (out.payload && typeof out.payload === 'object' && typeof (out.payload as Row).email === 'string') out.payload = { ...(out.payload as Row), email: mask(String((out.payload as Row).email)) };
-    return out;
-  };
-  return { ...e, before: m(e.before), after: m(e.after) };
+  return { ...e, before: e.before && maskRow(e.before), after: e.after && maskRow(e.after) };
 }
 const simView = (s: Row) => ({
   id: s.id, action_id: s.action_id, verdict: s.verdict, created_at: s.created_at, effect_digest: s.effect_digest, schema_fp: s.schema_fp,
@@ -127,12 +120,12 @@ export function createApp(o: AppOpts) {
       if (seg[1] === 'simulations' && seg.length === 3) return send(res, 200, simView(await engine.simulation(ws, idOk(seg[2]))));
       if (seg[1] === 'executions' && seg.length === 3) return send(res, 200, execView(await engine.execution(ws, idOk(seg[2]))));
       if (p === '/api/records') {
-        const ids = (url.searchParams.get('ids') ?? '').split(',').filter((x) => /^[a-z]{3}_[0-9a-z]{1,20}$/.test(x));
+        const ids = (url.searchParams.get('ids') ?? '').split(',').filter((x) => /^[a-z]{2,3}_[0-9a-z]{1,20}$/.test(x));
         return send(res, 200, await engine.records(ws, String(url.searchParams.get('table')), ids));
       }
     } else if (m === 'POST') {
       const body = await json(req);
-      if (p === '/api/reset') { await engine.reset(ws); return send(res, 200, { ok: true }); }
+      if (p === '/api/reset') { heavyGate(); await engine.reset(ws); return send(res, 200, { ok: true }); }
       if (p === '/api/actions') {
         const b = body as { intent?: string; template?: string; params?: Record<string, number>; exclude?: string[] };
         return send(res, 201, await engine.propose(ws, { intent: b.intent, template: b.template, params: b.params, exclude: Array.isArray(b.exclude) ? b.exclude : [] }, op));

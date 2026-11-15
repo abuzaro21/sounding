@@ -166,6 +166,23 @@ test('schema drift: a trigger added after the simulation is refused; with that c
   }
 });
 
+test('schema drift: a changed column default is refused (Codex R2-2), and so is a changed function without the snd_ prefix', async () => {
+  const ws = await newWs(engine);
+  const p1 = await approvedPurge(engine, ws);
+  await db.q('*', `alter table outbox alter column created_at set default '2000-01-01'::timestamptz`);
+  try {
+    const x = await engine.execute(ws, p1.apr.id, p1.apr.nonce, 'op');
+    assert.equal(x.status, 'refused');
+    assert.equal(receipt(x).checks.find((c) => c.name === 'schema unchanged')!.ok, false);
+  } finally { await db.q('*', 'alter table outbox alter column created_at set default now()'); }
+  const ws2 = await newWs(engine);
+  const p2 = await approvedPurge(engine, ws2);
+  await db.q('*', `create or replace function helper_fn() returns int language sql as 'select 1'`);
+  try {
+    assert.equal((await engine.execute(ws2, p2.apr.id, p2.apr.nonce, 'op')).status, 'refused');
+  } finally { await db.q('*', 'drop function helper_fn()'); }
+});
+
 test('deferred constraint triggers fire inside the measurement, in simulation and execution alike', async () => {
   await db.q('*', `create or replace function snd_test_deferred() returns trigger language plpgsql as $$ begin
       insert into ledger_entries (workspace_id, id, kind, ref, amount_cents) values (old.workspace_id, snd_id('le', 'deferred|' || old.id), 'deferred_audit', old.id, 0); return null; end $$;
@@ -242,6 +259,13 @@ test('workspaces are isolated: by query scope and by row-level security', async 
   await assert.rejects(db.q(wb, `insert into ledger_entries (workspace_id, id, kind, ref, amount_cents) values ($1, 'le_x', 'x', 'x', 0)`, [wa]), /row-level security/);
   const deleted = await db.q(wb, `delete from customers where workspace_id = $1 returning id`, [wa]);
   assert.equal(deleted.length, 0);
+  // The control plane has the same policies (Codex R7-6): B's scope sees none of A's evidence, receipts or workspace row.
+  const { CONTROL } = await import('../src/schema.ts');
+  for (const t of CONTROL) assert.equal(await count(db, wb, `select count(*) as n from ${t} where workspace_id = $2 and $1 = $1`, [wa]), 0, `${t} is not readable across workspaces`);
+  assert.equal(await count(db, wb, 'select count(*) as n from workspaces where id = $2 and $1 = $1', [wa]), 0);
+  // Control-plane references are tenant-qualified (Codex R7-7): B's approval cannot point at A's simulation.
+  await assert.rejects(db.q('*', `insert into approvals (workspace_id, id, simulation_id, operator, binding, binding_hash, nonce, expires_at, status)
+    values ($1, 'apr_x', $2, 'op', '{}', 'x', 'x', now(), 'rejected')`, [wb, s2.id]), /foreign key/);
 });
 
 test('the audit log is a verifiable hash chain; editing any event breaks it', async () => {

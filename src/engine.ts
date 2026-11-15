@@ -14,6 +14,10 @@ export class HttpError extends Error {
   status: number; code: string; data?: unknown;
   constructor(status: number, code: string, message: string, data?: unknown) { super(message); this.status = status; this.code = code; this.data = data; }
 }
+/** The approval this execution claimed was resolved by another process before its transaction began. */
+class Reclaimed extends Error {}
+/** Per-workspace history limits. A demo session needs a handful; Reset clears them. */
+export const QUOTA = { simulations: 40, actions: 120, drifts: 40 };
 class Refused extends Error { reason: string; checks: Check[]; constructor(reason: string, checks: Check[]) { super(reason); this.reason = reason; this.checks = checks; } }
 class VerifyFailed extends Error {
   checks: Check[]; cmp: ReturnType<typeof compare>; policy: PolicyResult; pre: Digest; attempted: Effect[];
@@ -36,7 +40,7 @@ export type EngineOpts = {
   secret: string; outboxHoldS?: number; simTtlMs?: number; approvalTtlMs?: number; recoveryMs?: number;
   maxWorkspaces?: number; idleMs?: number; seed?: number;
 };
-export type Hooks = { skipSchemaCheck?: boolean; skipVersionCheck?: boolean; beforeCommit?: (c: import('pg').PoolClient) => unknown };
+export type Hooks = { skipSchemaCheck?: boolean; skipVersionCheck?: boolean; beforeCommit?: (c: import('pg').PoolClient) => unknown; afterCommit?: () => unknown; afterClaim?: () => unknown };
 
 export class Engine {
   db: Db; o: Required<EngineOpts>;
@@ -58,24 +62,29 @@ export class Engine {
 
   // ---------- workspaces ----------
   async createWorkspace(tokenHash: string) {
-    const [{ n }] = await this.db.q<{ n: number }>('*', 'select count(*)::int as n from workspaces');
-    if (n >= this.o.maxWorkspaces) {
-      await this.purgeIdle(3600_000);
-      const [{ n: m }] = await this.db.q<{ n: number }>('*', 'select count(*)::int as n from workspaces');
-      if (m >= this.o.maxWorkspaces) throw new HttpError(503, 'full', 'The demo is at capacity. Try again later.');
-    }
-    const ws = id('ws');
-    await this.#seed(ws, tokenHash);
-    await this.audit(ws, 'workspace.created', { seed: this.o.seed });
-    return ws;
+    return this.#gate(async () => {
+      const ws = id('ws');
+      for (let attempt = 1; ; attempt++) {
+        // Count and insert under one lock, so concurrent sessions cannot overshoot the cap (Codex R7-4).
+        const ok = await this.db.tx('*', async (q) => {
+          await q('select pg_advisory_xact_lock(hashtext($1))', ['workspaces']);
+          const [{ n }] = await q<{ n: number }>('select count(*)::int as n from workspaces');
+          if (n >= this.o.maxWorkspaces) return false;
+          await this.#seed(q, ws, tokenHash);
+          return true;
+        }, { statementMs: 20_000 });
+        if (ok) break;
+        if (attempt === 2) throw new HttpError(503, 'full', 'The demo is at capacity. Try again later.');
+        await this.purgeIdle(3600_000);
+      }
+      await this.audit(ws, 'workspace.created', { seed: this.o.seed });
+      return ws;
+    });
   }
-  async #seed(ws: string, tokenHash: string) {
-    const { rows } = generate(this.o.seed);
-    await this.db.tx(ws, async (q) => {
-      await q('delete from workspaces where id = $1', [ws]); // reset: everything of this workspace cascades away
-      await q('insert into workspaces (id, token_hash, seed) values ($1, $2, $3)', [ws, tokenHash, this.o.seed]);
-      await insertSeed(q, ws, rows);
-    }, { statementMs: 20_000 });
+  async #seed(q: Q, ws: string, tokenHash: string) {
+    await q('delete from workspaces where id = $1', [ws]); // reset: everything of this workspace cascades away
+    await q('insert into workspaces (id, token_hash, seed) values ($1, $2, $3)', [ws, tokenHash, this.o.seed]);
+    await insertSeed(q, ws, generate(this.o.seed).rows);
   }
   async workspaceFor(tokenHash: string) {
     const [w] = await this.db.q<{ id: string }>('*', 'update workspaces set last_seen = now() where token_hash = $1 returning id', [tokenHash]);
@@ -84,14 +93,26 @@ export class Engine {
   async reset(ws: string) {
     const [w] = await this.db.q<{ token_hash: string }>('*', 'select token_hash from workspaces where id = $1', [ws]);
     if (!w) throw new HttpError(404, 'no-workspace', 'Workspace not found.');
-    await this.#seed(ws, w.token_hash);
+    await this.#gate(() => this.db.tx(ws, (q) => this.#seed(q, ws, w.token_hash), { statementMs: 20_000 }));
     await this.audit(ws, 'workspace.reset', {});
   }
   async purgeIdle(idleMs = this.o.idleMs) {
-    const gone = await this.db.q('*', `delete from workspaces where last_seen < now() - make_interval(secs => $1) returning id`, [idleMs / 1000]);
+    // A workspace lives at most as long as a recovery record, so every copy of erased data it holds (simulation
+    // before-images, receipts, recovery records) is gone within that window plus one purge interval (Codex R6-10).
+    const gone = await this.db.q('*', `delete from workspaces where last_seen < now() - make_interval(secs => $1) or created_at < now() - make_interval(secs => $2) returning id`,
+      [idleMs / 1000, this.o.recoveryMs / 1000]);
     // Recovery copies of deleted data are kept only for their window (bounded retention).
     await this.db.q('*', `update executions set recovery = null, recovery_status = 'expired' where recovery_status = 'available' and recovery_expires_at < now()`);
     return gone.length;
+  }
+
+  /** A bounded history per workspace, so one visitor cannot fill the shared database (Codex R7-1). Reset clears it. */
+  async #quota(ws: string) {
+    const [u] = await this.db.q<{ sims: number; acts: number; drifts: number }>(ws, `select
+      (select count(*)::int from simulations where workspace_id = $1) as sims, (select count(*)::int from actions where workspace_id = $1) as acts,
+      (select count(*)::int from audit where workspace_id = $1 and type like 'drift.%') as drifts`, [ws]);
+    if (u.sims >= QUOTA.simulations || u.acts >= QUOTA.actions || u.drifts >= QUOTA.drifts)
+      throw new HttpError(429, 'workspace-full', `This workspace has reached its history limit (${QUOTA.simulations} simulations, ${QUOTA.actions} actions, ${QUOTA.drifts} business events). Reset data to start fresh.`);
   }
 
   // ---------- audit chain ----------
@@ -131,6 +152,7 @@ export class Engine {
     return this.#storeAction(ws, spec, origin, intent, parentId, rationale ?? `Compiled as: ${reading}.`);
   }
   async #storeAction(ws: string, spec: Spec, origin: string, intent: string, parentId?: string, rationale?: string) {
+    await this.#quota(ws);
     const aid = id('act');
     const exp = expectation(spec);
     await this.db.q(ws, `insert into actions (id, workspace_id, parent_id, origin, intent, spec, spec_hash, expectation, rationale) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -162,7 +184,10 @@ export class Engine {
     return this.propose(ws, { template: a.spec.template, params: a.spec.params, exclude: r.exclude }, AGENT, a.id, r.rationale);
   }
   async #supersede(ws: string, aid: string) {
-    await this.db.q(ws, `update actions set status = 'superseded' where workspace_id = $1 and id = $2 and status = 'proposed'`, [ws, aid]);
+    // Waits on the row lock a running execution holds, then sees its outcome (Codex R6-1).
+    const done = await this.db.q(ws, `update actions set status = 'superseded' where workspace_id = $1 and id = $2 and status = 'proposed' returning id`, [ws, aid])
+      .catch((e) => { if ((e as { code?: string }).code === '55P03') throw new HttpError(409, 'busy', 'This action is executing right now.'); throw e; });
+    if (!done.length) throw new HttpError(409, 'not-editable', 'This action is no longer open; it was executed, rejected or replaced.');
     await this.db.q(ws, `update approvals set status = 'rejected', outcome = 'superseded by a modified action' where workspace_id = $1 and status = 'approved'
       and simulation_id in (select id from simulations where action_id = $2)`, [ws, aid]);
   }
@@ -200,6 +225,7 @@ export class Engine {
   async simulate(ws: string, aid: string) {
     const a = await this.action(ws, aid);
     if (a.status !== 'proposed') throw new HttpError(409, 'not-simulatable', `This action is ${a.status}; propose a new one.`);
+    await this.#quota(ws);
     return this.#gate(async () => {
       const r = await this.#runner(ws, a.spec);
       const sid = id('sim'), t0 = Date.now();
@@ -210,7 +236,7 @@ export class Engine {
         try {
           run = await this.db.tx(ws, async (q) => {
             const { fp, uncaptured } = await schemaFingerprint(q);
-            if (uncaptured.length) throw new HttpError(503, 'capture-incomplete', `Refusing to simulate: no capture trigger on ${uncaptured.join(', ')}.`);
+            if (uncaptured.length) throw new HttpError(503, 'capture-incomplete', `Refusing to simulate, the measurement would be incomplete: ${uncaptured.join('; ')}.`);
             const pre = await stateDigest(q, ws);
             const predicate = r.resolve ? await r.resolve(q) : null;
             await q('savepoint dry_run');
@@ -250,6 +276,9 @@ export class Engine {
       await this.db.q(ws, `insert into simulations (id, workspace_id, action_id, spec_hash, schema_fp, row_versions, effects, effect_digest, report, verdict, durable)
         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [sid, ws, aid, a.spec_hash, run.fp, JSON.stringify(run.versions), JSON.stringify(effects), digest, JSON.stringify(report), policy.verdict, JSON.stringify(durable)]);
+      // Only the latest simulation of an action may be acted on: an approval of an older one is revoked (Codex R6-6).
+      await this.db.q(ws, `update approvals set status = 'rejected', outcome = 'superseded by a newer simulation' where workspace_id = $1 and status = 'approved'
+        and simulation_id in (select id from simulations where workspace_id = $1 and action_id = $2 and id <> $3)`, [ws, aid, sid]);
       await this.audit(ws, 'simulation.completed', { simulation: sid, action: aid, verdict: policy.verdict, effects: effects.length, digest, unchanged: durable.unchanged });
       return this.simulation(ws, sid);
     });
@@ -302,7 +331,8 @@ export class Engine {
   }
   async reject(ws: string, sid: string, operator: string, reason = 'rejected by the operator') {
     const s = await this.simulation(ws, sid);
-    const [a] = await this.db.q(ws, `update actions set status = 'rejected' where workspace_id = $1 and id = $2 and status = 'proposed' returning id`, [ws, s.action_id]);
+    const [a] = await this.db.q(ws, `update actions set status = 'rejected' where workspace_id = $1 and id = $2 and status = 'proposed' returning id`, [ws, s.action_id])
+      .catch((e) => { if ((e as { code?: string }).code === '55P03') throw new HttpError(409, 'busy', 'This action is executing right now.'); throw e; });
     if (!a) throw new HttpError(409, 'not-rejectable', 'This action is no longer open.');
     await this.db.q(ws, `update approvals set status = 'rejected', outcome = $3 where workspace_id = $1 and status = 'approved' and simulation_id in (select id from simulations where action_id = $2)`, [ws, s.action_id, reason]);
     await this.audit(ws, 'action.rejected', { action: s.action_id, simulation: sid, operator, reason });
@@ -311,6 +341,10 @@ export class Engine {
 
   // ---------- execution ----------
   async execute(ws: string, aprId: string, nonce: string, operator: string) {
+    // Admission first: a busy server must not consume the approval it then cannot run (Codex R6-5, R7-5).
+    return this.#gate(() => this.#claimAndExecute(ws, aprId, nonce, operator));
+  }
+  async #claimAndExecute(ws: string, aprId: string, nonce: string, operator: string) {
     // 1. Claim the approval, once. A double click, a replay or a second operator finds it no longer 'approved'.
     const [apr] = await this.db.q<Row>(ws, `update approvals set status = 'executing' where workspace_id = $1 and id = $2 and nonce = $3 and status = 'approved'
       and expires_at > now() and operator = $4 returning *`, [ws, aprId, sha(String(nonce)), operator]);
@@ -321,7 +355,8 @@ export class Engine {
         : Date.parse(String(x.expires_at)) <= Date.now() ? 'This approval has expired.' : 'The approval token does not match.';
       throw new HttpError(409, 'approval-unusable', why);
     }
-    return this.#gate(() => this.#execute(ws, apr));
+    await this.hooks.afterClaim?.();
+    return this.#execute(ws, apr);
   }
 
   async #execute(ws: string, apr: Row) {
@@ -333,16 +368,31 @@ export class Engine {
     const base = { execution_id: eid, action_id: a.id, simulation_id: s.id, approval_id: apr.id, operator: apr.operator, approved_digest: s.effect_digest, isolation: 'serializable' };
     const checks: Check[] = [];
     const bindingNow = { ...(apr.binding as Row) };
-    checks.push({ name: 'approval binding', ok: this.#bindingHash(bindingNow) === apr.binding_hash && bindingNow.effect_digest === s.effect_digest && bindingNow.spec_hash === a.spec_hash && bindingNow.row_versions === sha(canonical(s.row_versions)),
-      detail: 'approval is bound to this simulation, spec, effect digest and row versions' });
-    checks.push({ name: 'action still open', ok: a.status === 'proposed', detail: `action is ${a.status}` });
+    // The signed binding must equal one rebuilt from the records execution will actually use, digests recomputed (Codex R6-4).
+    const rebuilt = {
+      workspace: ws, operator: apr.operator, action_id: a.id, spec_hash: sha(canonical(a.spec)), simulation_id: s.id, effect_digest: effectDigest(approved), effects: approved.length,
+      schema_fp: s.schema_fp, row_versions: sha(canonical(s.row_versions)), policy_version: POLICY_VERSION, expires_at: new Date(apr.expires_at as string | Date).toISOString(), nonce_hash: apr.nonce,
+    };
+    checks.push({ name: 'approval binding', ok: this.#bindingHash(bindingNow) === apr.binding_hash && canonical(bindingNow) === canonical(rebuilt) && a.spec_hash === rebuilt.spec_hash && s.effect_digest === rebuilt.effect_digest,
+      detail: 'the signed binding matches this workspace, operator, action, spec, simulation, effect digest, schema, row versions, policy and expiry' });
     let pre: Digest | undefined;
     try {
       if (!checks.every((c) => c.ok)) throw new Refused('The approval no longer matches its action.', checks);
-      const out = await this.db.tx(ws, async (q) => {
+      const outside = checks.length;
+      const attempt = () => this.db.tx(ws, async (q) => {
+        checks.length = outside; // a retried attempt re-runs every in-transaction check from scratch
         await q('select pg_advisory_xact_lock(hashtext($1))', [`exec:${ws}`]); // one execution per workspace at a time
+        // Still ours? Start-up reconciliation in another process may have resolved this claim (Codex R6-2).
+        const [mine] = await q<{ status: string }>('select status from approvals where workspace_id = $1 and id = $2 for update', [ws, apr.id]);
+        if (mine?.status !== 'executing') throw new Reclaimed();
+        // The action row stays locked until commit: a concurrent edit, revision or rejection waits, then finds it executed (Codex R6-1).
+        const [act] = await q<{ status: string }>('select status from actions where workspace_id = $1 and id = $2 for update', [ws, a.id]);
+        const [latest] = await q<{ id: string }>('select id from simulations where workspace_id = $1 and action_id = $2 order by created_at desc, id desc limit 1', [ws, a.id]);
+        checks.push({ name: 'action still open', ok: act?.status === 'proposed' && latest?.id === s.id,
+          detail: act?.status !== 'proposed' ? `action is ${act?.status}` : latest?.id !== s.id ? 'a newer simulation of this action exists' : 'locked; this is its latest simulation' });
+        if (!checks.every((c) => c.ok)) throw new Refused('The action changed after it was approved.', checks);
         const { fp, uncaptured } = await schemaFingerprint(q);
-        checks.push({ name: 'capture coverage', ok: !uncaptured.length, detail: uncaptured.length ? `no capture trigger on ${uncaptured.join(', ')}` : `every business table journals its changes` });
+        checks.push({ name: 'capture coverage', ok: !uncaptured.length, detail: uncaptured.length ? uncaptured.join('; ') : 'every table a change can reach journals it; no bookkeeping triggers' });
         const schemaOk = fp === s.schema_fp || !!this.hooks.skipSchemaCheck;
         checks.push({ name: 'schema unchanged', ok: schemaOk, detail: fp === s.schema_fp ? 'tables, constraints, triggers and functions match the simulation' : this.hooks.skipSchemaCheck ? 'CHANGED (check disabled by test hook)' : 'tables, constraints, triggers or functions changed since the simulation' });
         if (!checks.every((c) => c.ok)) throw new Refused('The database schema changed after the simulation.', checks);
@@ -375,14 +425,33 @@ export class Engine {
         await q(`update actions set status = 'executed' where id = $1`, [a.id]);
         if (a.spec.template === 'restore_execution') await q(`update executions set recovery_status = 'restored', recovery = null where workspace_id = $1 and id = $2`, [ws, a.spec.params.execution_id]);
         return receipt;
-      }, { isolation: 'serializable', capture: eid, action: a.id, statementMs: 10_000, beforeCommit: this.hooks.beforeCommit });
+      }, { isolation: 'serializable', capture: eid, action: a.id, statementMs: 10_000, beforeCommit: this.hooks.beforeCommit, afterCommit: this.hooks.afterCommit });
+      // SERIALIZABLE can abort on a false-positive conflict with an unrelated workspace's execution. The aborted attempt
+      // changed nothing, so it is safe to run again: every check is repeated against the data as it is then.
+      let out: Awaited<ReturnType<typeof attempt>>;
+      for (let n = 1; ; n++) {
+        try { out = await attempt(); break; } catch (e) {
+          if (n < 5 && ['40001', '40P01'].includes((e as { code?: string }).code ?? '')) {
+            pre = undefined; await new Promise((r) => setTimeout(r, 25 * n + Math.random() * 50)); continue;
+          }
+          throw e;
+        }
+      }
       await this.audit(ws, 'execution.committed', { execution: eid, approval: apr.id, effects: out.effects, post_state: out.post_state });
       return this.execution(ws, eid);
     } catch (e) {
+      if (e instanceof Reclaimed) throw new HttpError(409, 'approval-unusable', 'This approval was resolved by another process; see its receipt.');
       if (e instanceof CommitUnknown) {
-        // The connection died during COMMIT. The outcome is whatever PostgreSQL durably recorded: look for our receipt.
-        const [x] = await this.db.q<Row>(ws, 'select id from executions where workspace_id = $1 and id = $2', [ws, eid]);
+        // The connection died during COMMIT. The outcome is whatever PostgreSQL durably recorded. The original backend holds
+        // the execution lock until its transaction ends, so take that lock before looking for the receipt (Codex R6-7).
+        const [x] = await this.db.tx(ws, async (q) => {
+          await q('select pg_advisory_xact_lock(hashtext($1))', [`exec:${ws}`]);
+          return q<Row>('select id from executions where workspace_id = $1 and id = $2', [ws, eid]);
+        }, { lockMs: 30_000 }).catch(() => { throw new HttpError(503, 'outcome-unknown', 'The outcome of this execution is not known yet. Reload in a minute: the receipt will say.'); });
         if (x) { await this.db.q(ws, `update approvals set status = 'consumed', outcome = 'committed (confirmed after connection loss)' where id = $1`, [apr.id]); return this.execution(ws, eid); }
+        // Not ours, but another process (start-up reconciliation) may already have recorded the outcome for this approval.
+        const [theirs] = await this.db.q<Row>(ws, 'select id from executions where workspace_id = $1 and approval_id = $2', [ws, apr.id]);
+        if (theirs) return this.execution(ws, String(theirs.id));
         return this.#failed(ws, apr, eid, a, 'rolled_back', 'The connection was lost during COMMIT; no receipt was durably written, so the transaction did not commit.', checks, pre, base);
       }
       if (e instanceof Refused) return this.#failed(ws, apr, eid, a, 'refused', e.reason, e.checks, undefined, base);
@@ -440,11 +509,19 @@ export class Engine {
       from approvals a where a.status = 'executing'`);
     for (const s of stuck) {
       const ws = String(s.workspace_id);
-      if (s.done) { await this.db.q(ws, `update approvals set status = 'consumed', outcome = 'committed (reconciled at start-up)' where id = $1`, [s.id]); continue; }
-      const [sim] = await this.db.q<Row>(ws, 'select action_id from simulations where id = $1', [s.simulation_id]);
-      await this.db.q(ws, `insert into executions (id, workspace_id, approval_id, simulation_id, action_id, status, receipt) values ($1,$2,$3,$4,$5,'rolled_back',$6)`,
-        [id('exe'), ws, s.id, s.simulation_id, sim.action_id, JSON.stringify({ status: 'rolled_back', reason: 'The server stopped during execution. No receipt was committed, so PostgreSQL rolled the transaction back.', next: 'Simulate again.' })]);
-      await this.db.q(ws, `update approvals set status = 'failed', outcome = 'interrupted' where id = $1`, [s.id]);
+      // Under the execution lock and the approval row lock: a live execution in another process has either finished (its
+      // receipt is visible) or not begun its transaction, and will then find the claim resolved (Codex R6-2).
+      await this.db.tx(ws, async (q) => {
+        await q('select pg_advisory_xact_lock(hashtext($1))', [`exec:${ws}`]);
+        const [now] = await q<Row>(`select a.status, exists(select 1 from executions e where e.workspace_id = a.workspace_id and e.approval_id = a.id) as receipt,
+          (select action_id from simulations m where m.workspace_id = a.workspace_id and m.id = a.simulation_id) as action_id
+          from approvals a where a.workspace_id = $1 and a.id = $2 for update`, [ws, s.id]);
+        if (now?.status !== 'executing') return;
+        if (now.receipt) { await q(`update approvals set status = 'consumed', outcome = 'committed (reconciled at start-up)' where id = $1`, [s.id]); return; }
+        await q(`insert into executions (id, workspace_id, approval_id, simulation_id, action_id, status, receipt) values ($1,$2,$3,$4,$5,'rolled_back',$6)`,
+          [id('exe'), ws, s.id, s.simulation_id, now.action_id, JSON.stringify({ status: 'rolled_back', reason: 'The server stopped during execution. No receipt was committed, so PostgreSQL rolled the transaction back.', next: 'Simulate again.' })]);
+        await q(`update approvals set status = 'failed', outcome = 'interrupted' where id = $1`, [s.id]);
+      });
     }
     return stuck.length;
   }
@@ -453,6 +530,7 @@ export class Engine {
   /** Ordinary business activity in the visitor's own workspace, committed normally (no capture), to create drift. */
   async drift(ws: string, kind: string) {
     if (!['ledger_mirroring', 'new_order', 'reopen_case'].includes(kind)) throw new HttpError(400, 'bad-drift', 'Unknown drift.');
+    await this.#quota(ws);
     const [s] = await this.db.q<Row>(ws, `select s.id, s.effects, a.spec from simulations s join actions a on a.id = s.action_id
       where s.workspace_id = $1 and s.verdict = 'safe' and a.status = 'proposed' and a.spec->>'template' = 'purge_inactive_customers' order by s.created_at desc limit 1`, [ws]);
     if (kind === 'ledger_mirroring') {
@@ -548,7 +626,11 @@ const UNKNOWN = [
 ];
 
 export function mask(email: string) { const [u, d] = email.split('@'); return `${u.slice(0, 2)}***@${d}`; }
-function maskRow(r: Row) { return Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'workspace_id').map(([k, v]) => [k, k === 'email' ? mask(String(v)) : v])); }
+/** E-mail addresses masked, at the top level and inside an outbox payload (Codex R7-9); workspace_id dropped. */
+export function maskRow(r: Row): Row {
+  return Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'workspace_id').map(([k, v]) => [k,
+    k === 'email' && typeof v === 'string' ? mask(v) : k === 'payload' && v && typeof v === 'object' && !Array.isArray(v) ? maskRow(v as Row) : v]));
+}
 
 /** Row count and content hash of every business table in the workspace: the state an execution or rollback is judged by. */
 export async function stateDigest(q: Q, ws: string): Promise<Digest> {

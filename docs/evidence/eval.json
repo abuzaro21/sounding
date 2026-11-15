@@ -3,14 +3,14 @@
  "seeds": 40,
  "effect_set_on_commit": {
   "predicted_and_actual": 605,
-  "actual_not_predicted": 0,
   "predicted_not_actual": 0,
+  "actual_not_predicted": 0,
   "precision": 1,
   "recall": 1
  },
  "naive_agent_projection_recall": 0.167,
  "tallies": {
-  "blocking_rows_prevented": 935,
+  "blocking_rows_prevented": 866,
   "caught_by:ledger_mirroring:effects match approval": 9,
   "caught_by:new_order:effects match approval": 6,
   "caught_by:reopen_case:row versions": 10,

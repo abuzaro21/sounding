@@ -6,12 +6,25 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Db } from '../src/db.ts';
 import { Engine, stateDigest } from '../src/engine.ts';
-import { effectsFrom, type Effect, type Journal } from '../src/effects.ts';
+import { canonical, effectsFrom, type Effect, type Journal } from '../src/effects.ts';
 import { rng } from '../src/seed.ts';
 import { TEMPLATES, type Spec } from '../src/templates.ts';
 
 type Tally = Record<string, number>;
 const DRIFTS = ['none', 'new_order', 'reopen_case', 'ledger_mirroring'] as const;
+
+/**
+ * Prediction accuracy. An effect matches only with the same key and the same before/after images (Codex R2-4). A
+ * predicted effect that did not happen is a false positive; one that happened unpredicted is a false negative.
+ */
+export function score(predicted: Effect[], actual: Effect[]) {
+  const print = (y: Effect) => canonical({ k: y.key, b: y.before ?? null, a: y.after ?? null });
+  const a = new Set(actual.map(print)), p = new Set(predicted.map(print));
+  let tp = 0, fp = 0, fn = 0;
+  for (const k of p) if (a.has(k)) tp++; else fp++;
+  for (const k of a) if (!p.has(k)) fn++;
+  return { tp, fp, fn };
+}
 
 export async function evaluate(url: string, seeds: number[]) {
   const db = new Db(url, 8);
@@ -42,7 +55,9 @@ export async function evaluate(url: string, seeds: number[]) {
       naiveTotal += eff.length; naiveHit += eff.filter((x) => x.cause === 'direct').length;
       if (s.verdict === 'blocked') {
         inc('initial_plans_blocked');
-        inc('blocking_rows_prevented', (s.report as { policy: { findings: { severity: string; rows: unknown[] }[] } }).policy.findings.filter((f) => f.severity === 'block').reduce((n, f) => n + f.rows.length, 0));
+        // Distinct rows: one unpaid invoice can match two rules (Codex R2-5).
+        const blocked = (s.report as { policy: { findings: { severity: string; rows: { tbl: string; id: string }[] }[] } }).policy.findings.filter((f) => f.severity === 'block');
+        inc('blocking_rows_prevented', new Set(blocked.flatMap((f) => f.rows.map((x) => `${x.tbl}:${x.id}`))).size);
         a = await e.agentRevision(ws, String(s.id));
         s = await e.simulate(ws, a.id);
         inc('simulations'); check(s);
@@ -63,10 +78,8 @@ export async function evaluate(url: string, seeds: number[]) {
       const receipt = x.receipt as { state_restored?: boolean; checks: { name: string; ok: boolean }[]; comparison?: { counts: { unexpected: number } } };
       if (x.status === 'committed') {
         const [row] = await db.q<{ recovery: Journal }>(ws, 'select recovery from executions where id = $1', [x.id]);
-        const actual = new Set(effectsFrom(row.recovery, TEMPLATES[template].direct(a.spec as Spec)).map((y) => y.key));
-        const predicted = new Set((s.effects as Effect[]).map((y) => y.key));
-        for (const k of predicted) if (actual.has(k)) tp++; else fn++;
-        for (const k of actual) if (!predicted.has(k)) fp++;
+        const sc = score(s.effects as Effect[], effectsFrom(row.recovery, TEMPLATES[template].direct(a.spec as Spec)));
+        tp += sc.tp; fp += sc.fp; fn += sc.fn;
         if (drift !== 'none' && drift !== 'reopen_case') inc('false_safe_commit_under_drift');
       } else {
         const post = await db.tx(ws, (q) => stateDigest(q, ws));
@@ -94,7 +107,7 @@ export async function evaluate(url: string, seeds: number[]) {
   const precision = tp + fp ? tp / (tp + fp) : 1, recall = tp + fn ? tp / (tp + fn) : 1;
   return {
     seeds: seeds.length,
-    effect_set_on_commit: { predicted_and_actual: tp, actual_not_predicted: fp, predicted_not_actual: fn, precision, recall },
+    effect_set_on_commit: { predicted_and_actual: tp, predicted_not_actual: fp, actual_not_predicted: fn, precision, recall },
     naive_agent_projection_recall: naiveTotal ? Math.round((naiveHit / naiveTotal) * 1000) / 1000 : null,
     tallies: Object.fromEntries(Object.entries(t).sort()),
     cases,

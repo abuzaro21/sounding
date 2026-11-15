@@ -106,8 +106,26 @@ test('simulation refuses to run if any business table is not journalled', async 
   const a = await engine.propose(ws, { intent: PURGE }, 'agent');
   await db.q('*', 'alter table addresses disable trigger zzz_capture');
   try {
-    await assert.rejects(engine.simulate(ws, a.id), /no capture trigger on addresses/);
+    await assert.rejects(engine.simulate(ws, a.id), /addresses \(no capture trigger\)/);
   } finally {
     await db.q('*', 'alter table addresses enable trigger zzz_capture');
   }
+});
+
+test('a table outside the journalled set that a cascade reaches, or a trigger on a bookkeeping table, stops the simulation', async () => {
+  const ws = await newWs(engine);
+  const a = await engine.propose(ws, { intent: PURGE }, 'agent');
+  // Codex R2-1: a migration adds a child table with ON DELETE CASCADE but no capture trigger.
+  await db.q('*', `create table loyalty_cards (workspace_id text not null, id text not null, customer_id text not null, primary key (workspace_id, id),
+    foreign key (workspace_id, customer_id) references customers(workspace_id, id) on delete cascade)`);
+  try {
+    await assert.rejects(engine.simulate(ws, a.id), /loyalty_cards \(not journalled, but reachable by foreign key\)/);
+  } finally { await db.q('*', 'drop table loyalty_cards'); }
+  // Codex R6-3: a trigger on a table that execution writes after verification could make unmeasured writes.
+  await db.q('*', `create or replace function zz_side() returns trigger language plpgsql as $$ begin return null; end $$`);
+  await db.q('*', 'create trigger zz_side after insert on executions for each row execute function zz_side()');
+  try {
+    await assert.rejects(engine.simulate(ws, a.id), /executions \(bookkeeping table with a trigger\)/);
+  } finally { await db.q('*', 'drop trigger zz_side on executions'); await db.q('*', 'drop function zz_side()'); }
+  assert.equal((await engine.simulate(ws, a.id)).verdict, 'blocked', 'with the schema restored, simulation runs again');
 });
