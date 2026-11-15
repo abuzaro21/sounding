@@ -34,6 +34,6 @@ Status values: **PASS** (evidence linked and re-runnable), **OPEN** (not done), 
 | R2–R3–R8 | simulator, side effects, eval honesty | `42faa18` | 7 | 7 fixed in `60b23b7` |
 | R4–R5–R6 | approvals, execution, rollback, concurrency | `42faa18` | 12 | 11 fixed, 1 claim narrowed, in `60b23b7` |
 | R7 | API security, isolation | `42faa18` | 10 | 9 fixed in `60b23b7`, 1 accepted risk (ADR-007) |
-| R9 | final diff `42faa18..60b23b7` | `60b23b7` | 11 | 10 fixed in FIX_COMMIT; R9-4 fixed, its concurrent-overshoot part accepted |
+| R9 | final diff `42faa18..60b23b7` | `60b23b7` | 11 | 10 fixed in `9f31314`; R9-4 fixed, its concurrent-overshoot part accepted |
 
-The fixes in `60b23b7` were made after the reviews of `42faa18`; R9 reviewed them. **The R9 fixes (FIX_COMMIT) were made after R9 and have not been reviewed by Codex.** Their evidence is the tests named in [R9-codex.md](reviews/R9-codex.md).
+The fixes in `60b23b7` were made after the reviews of `42faa18`; R9 reviewed them. **The R9 fixes (`9f31314`) were made after R9 and have not been reviewed by Codex.** Their evidence is the tests named in [R9-codex.md](reviews/R9-codex.md).

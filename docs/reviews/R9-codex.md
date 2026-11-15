@@ -8,7 +8,7 @@
 | Reviewed | commit `60b23b7` (the fixes for R2–R8), diffed against `42faa18` |
 | Prompt | [R9-codex.prompt.md](R9-codex.prompt.md) |
 
-**Every fix below was made after this review, in commit FIX_COMMIT, and was not reviewed by Codex.** Their evidence is the tests named here.
+**Every fix below was made after this review, in commit `9f31314`, and was not reviewed by Codex.** Their evidence is the tests named here.
 
 ## Triage
 
