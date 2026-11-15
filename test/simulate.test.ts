@@ -127,5 +127,16 @@ test('a table outside the journalled set that a cascade reaches, or a trigger on
   try {
     await assert.rejects(engine.simulate(ws, a.id), /executions \(bookkeeping table with a trigger\)/);
   } finally { await db.q('*', 'drop trigger zz_side on executions'); await db.q('*', 'drop function zz_side()'); }
+  // Codex R9-2: the same child table in another schema.
+  await db.q('*', `create schema zz_other; create table zz_other.loyalty_cards (workspace_id text not null, id text not null, customer_id text not null, primary key (workspace_id, id),
+    foreign key (workspace_id, customer_id) references customers(workspace_id, id) on delete cascade)`);
+  try {
+    await assert.rejects(engine.simulate(ws, a.id), /zz_other\.loyalty_cards \(not journalled, but reachable by foreign key\)/);
+  } finally { await db.q('*', 'drop schema zz_other cascade'); }
+  // Codex R9-1: a rewrite rule on a bookkeeping table.
+  await db.q('*', 'create rule zz_rule as on insert to executions do also notify zz_rule');
+  try {
+    await assert.rejects(engine.simulate(ws, a.id), /executions \(bookkeeping table with a rewrite rule\)/);
+  } finally { await db.q('*', 'drop rule zz_rule on executions'); }
   assert.equal((await engine.simulate(ws, a.id)).verdict, 'blocked', 'with the schema restored, simulation runs again');
 });

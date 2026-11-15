@@ -16,13 +16,13 @@ The journal sees cascades, `SET NULL` actions, rows written by other triggers, a
 
 ## Coverage, checked on every simulation and execution
 
-`schemaFingerprint` walks every table in the schema, not just the known list, and reports a gap (which blocks) when:
+`schemaFingerprint` walks every table in every schema, not just the known list, and reports a gap (which blocks) when:
 
 - a business table has no capture trigger (`addresses (no capture trigger)`);
-- a table outside the journalled set is reachable by a foreign key from one that is (`loyalty_cards (not journalled, but reachable by foreign key)`), because a cascade into it would go unseen;
-- a bookkeeping table (`executions`, `approvals` …) has a trigger, which could write business rows from outside the journal.
+- a table outside the journalled set is reachable by a foreign key from one that is (`loyalty_cards (not journalled, but reachable by foreign key)`), because a cascade into it would go unseen. The walk crosses schemas: `zz_other.loyalty_cards` is found too;
+- a bookkeeping table (`executions`, `approvals` …) has a trigger or a rewrite rule, either of which could write business rows from outside the journal.
 
-The fingerprint itself covers tables, columns **with their defaults**, constraints, triggers with their enabled state, RLS and policies (qualifier and check), and the source of every non-extension function in the schema. A change to any of them between simulation and execution refuses the execution.
+The fingerprint itself covers tables, columns **with their defaults**, constraints, triggers with their enabled state, RLS and policies (qualifier and check), rewrite rules, and the source of every non-extension function in the schema. A change to any of them between simulation and execution refuses the execution.
 
 ## From journal to effects
 

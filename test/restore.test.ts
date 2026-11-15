@@ -84,6 +84,7 @@ test('after messages were delivered, restoration says so and queues compensation
   const f = (s.report as { policy: { findings: { rule: string; rows: unknown[] }[] } }).policy.findings.find((z) => z.rule === 'IRREVERSIBLE')!;
   assert.equal(f.rows.length, delivered);
   assert.equal(y!.status, 'committed');
+  assert.equal((receipt(y!) as unknown as { irreversible: unknown[] }).irreversible.length, delivered, 'the committed receipt names what was compensated, not unsent (Codex R9-11)');
   assert.equal(await count(d, ws, `select count(*) as n from outbox where workspace_id = $1 and topic like '%.compensate'`), delivered);
   assert.equal(await count(d, ws, 'select count(*) as n from deliveries where workspace_id = $1'), delivered, 'nothing can be unsent');
 });

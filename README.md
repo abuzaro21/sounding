@@ -12,10 +12,10 @@ Built for the DOO Builders League challenge "Simulate before you act".
 
 ## What you see in the demo
 
-Every visitor gets an isolated synthetic copy of *Larkspur Outfitters*, a fictional outdoor-gear shop with 12 business tables. Nothing in it is real.
+Every visitor gets an isolated synthetic copy of *Larkspur Outfitters*, a fictional outdoor-gear shop with 13 business tables. Nothing in it is real.
 
 1. **Ask.** "Remove inactive customer accounts older than 18 months." The agent expects to delete 48 customer rows.
-2. **Simulate.** The dry run measures **289 row changes in 9 tables**: orders, invoices, payments, shipments, subscriptions and addresses deleted by cascade; support cases orphaned by `SET NULL`; active customers silently edited through a referral self-FK; and messages queued to CRM, billing, carrier and helpdesk providers. The database is byte-for-byte unchanged afterwards, and the report proves it.
+2. **Simulate.** The dry run measures **289 row changes in 10 tables**: orders, invoices, payments, shipments, subscriptions and addresses deleted by cascade; support cases orphaned by `SET NULL`; active customers silently edited through a referral self-FK; and messages queued to CRM, billing, carrier and helpdesk providers. Afterwards every business table has the same row count and content hash as before, and the report shows the proof.
 3. **Blocked.** Policy `larkspur-2026.11-r1` finds unpaid invoices, active subscriptions, shipments in transit, open support cases and financial records inside the 7-year retention period. The plan cannot be approved.
 4. **Narrow.** The agent excludes the customers each finding traces back to (28 targets, 134 effects) and simulates again. Safe.
 5. **Approve.** The approval is an HMAC over the effect digest, spec hash, schema fingerprint, row versions, policy version and operator. It carries a one-time nonce and expires in 5 minutes.

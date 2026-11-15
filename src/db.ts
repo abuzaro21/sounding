@@ -13,6 +13,10 @@ export class CommitUnknown extends Error { cause: unknown; constructor(cause: un
 export class Db {
   pool: pg.Pool;
   constructor(url: string, max = 6) {
+    // An external Render hostname without sslmode would connect in plaintext; require TLS to be explicit (Codex R9-5).
+    const u = new URL(url);
+    if (/\.render\.com$/i.test(u.hostname) && !/^(require|verify-ca|verify-full)$/.test(u.searchParams.get('sslmode') ?? ''))
+      throw new Error('An external Render database URL needs ?sslmode=verify-full. Prefer the internal URL, which stays on the private network.');
     this.pool = new pg.Pool({
       // TLS comes from the URL's sslmode, with certificate verification (Codex R7-2). On Render the internal URL is used.
       connectionString: url, max, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000,
@@ -92,19 +96,24 @@ export async function schemaFingerprint(q: Q) {
   const [r] = await q<{ fp: string; capture: string[] }>(`
     with recursive t as (select c.oid, c.relname, c.relname = any($1) as biz from pg_class c join pg_namespace n on n.oid = c.relnamespace
                where n.nspname = current_schema() and c.relkind in ('r', 'p')),
+      -- Across every schema: a table elsewhere that a cascade reaches is just as unjournalled (Codex R9-2).
       reach(oid) as (select oid from t where biz
         union select k.conrelid from pg_constraint k join reach on k.confrelid = reach.oid where k.contype = 'f')
     select md5(string_agg(x, E'\n' order by x)) as fp, array(
       select relname || ' (no capture trigger)' from t where biz and not exists (
         select 1 from pg_trigger g where g.tgrelid = t.oid and g.tgname = 'zzz_capture' and g.tgenabled = 'O')
-      union all select t.relname || ' (not journalled, but reachable by foreign key)' from t join reach using (oid) where not t.biz
+      union all select case when n.nspname = current_schema() then '' else n.nspname || '.' end || c.relname || ' (not journalled, but reachable by foreign key)'
+        from reach join pg_class c on c.oid = reach.oid join pg_namespace n on n.oid = c.relnamespace where not exists (select 1 from t where t.oid = reach.oid and t.biz)
       union all select distinct t.relname || ' (bookkeeping table with a trigger)' from t join pg_trigger g on g.tgrelid = t.oid where not t.biz and not g.tgisinternal
+      -- A rewrite rule can write rows as a side effect of a receipt or approval insert, outside the journal (Codex R9-1).
+      union all select distinct t.relname || ' (bookkeeping table with a rewrite rule)' from t join pg_rewrite w on w.ev_class = t.oid where not t.biz and w.rulename <> '_RETURN'
       order by 1) as capture
     from (
       select 'col ' || t.relname || '.' || a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || ' ' || a.attnotnull || ' ' || coalesce(pg_get_expr(d.adbin, d.adrelid), '')
         from t join pg_attribute a on a.attrelid = t.oid left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum where a.attnum > 0 and not a.attisdropped
       union all select 'con ' || t.relname || ' ' || k.conname || ' ' || pg_get_constraintdef(k.oid) from t join pg_constraint k on k.conrelid = t.oid
       union all select 'trg ' || t.relname || ' ' || g.tgenabled::text || ' ' || pg_get_triggerdef(g.oid) from t join pg_trigger g on g.tgrelid = t.oid where not g.tgisinternal
+      union all select 'rul ' || t.relname || ' ' || w.ev_enabled::text || ' ' || pg_get_ruledef(w.oid) from t join pg_rewrite w on w.ev_class = t.oid where w.rulename <> '_RETURN'
       union all select 'pol ' || t.relname || ' ' || p.polname || ' ' || coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' ' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '') from t join pg_policy p on p.polrelid = t.oid
       union all select 'rls ' || c.relname || ' ' || c.relrowsecurity || ' ' || c.relforcerowsecurity from pg_class c join t on t.oid = c.oid
       union all select 'fn ' || p.oid::regprocedure::text || ' ' || md5(coalesce(p.prosrc, '') || coalesce(p.probin, '')) from pg_proc p join pg_namespace n on n.oid = p.pronamespace

@@ -21,7 +21,7 @@ SOUNDING is one Node 24 process and one PostgreSQL 16 database. There is no queu
                                                                       │ role `app`: NOSUPERUSER NOBYPASSRLS
                                                ┌──────────────────────▼────────────────────────┐
                                                │ PostgreSQL 16                                 │
-                                               │  12 business tables, RLS FORCE per workspace  │
+                                               │  13 business tables, RLS FORCE per workspace  │
                                                │  zzz_capture trigger on each → change_log     │
                                                │  domain triggers → outbox → deliveries        │
                                                │  actions, simulations, approvals, executions, │

@@ -21,11 +21,13 @@ export async function start(o: { port?: number; dbUrl: string; relaxedLimits?: b
   await new Promise<void>((r) => server.listen(o.port ?? 0, r));
   const tick = setInterval(() => void engine.dispatch().catch((e) => console.error('[sounding] dispatch failed', e.message)), 5000);
   const purge = setInterval(() => void engine.purgeIdle().catch((e) => console.error('[sounding] purge failed', e.message)), 15 * 60_000);
-  tick.unref(); purge.unref();
+  // Resolves approvals whose outcome was unknown (connection lost at COMMIT, or a busy lock at start-up).
+  const reconcile = setInterval(() => void engine.recoverInterrupted(120_000).catch((e) => console.error('[sounding] reconcile failed', e.message)), 60_000);
+  tick.unref(); purge.unref(); reconcile.unref();
   const port = (server.address() as { port: number }).port;
   return {
     port, engine, server, reconciled,
-    async close() { clearInterval(tick); clearInterval(purge); await new Promise((r) => server.close(r)); await db.close(); },
+    async close() { clearInterval(tick); clearInterval(purge); clearInterval(reconcile); await new Promise((r) => server.close(r)); await db.close(); },
   };
 }
 

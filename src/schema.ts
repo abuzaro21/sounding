@@ -168,7 +168,10 @@ create table if not exists approvals (
   unique (workspace_id, id),
   foreign key (workspace_id, simulation_id) references simulations(workspace_id, id) on delete cascade
 );
-create unique index if not exists approvals_one_live on approvals(simulation_id) where status in ('approved','executing','consumed');
+-- One approval per simulation, a failed one included: after a refusal or rollback, only a new simulation can be approved.
+-- That also bounds approvals, and so executions, by the simulation quota (Codex R9-4).
+drop index if exists approvals_one_live;
+create unique index if not exists approvals_one_per_simulation on approvals(simulation_id) where status <> 'rejected';
 create table if not exists executions (
   id text primary key, workspace_id text not null references workspaces(id) on delete cascade,
   approval_id text not null unique, simulation_id text not null, action_id text not null,
@@ -303,6 +306,14 @@ drop policy if exists ws_isolation on workspaces;
 create policy ws_isolation on workspaces using (id = current_setting('snd.ws', true) or current_setting('snd.ws', true) = '*')
   with check (id = current_setting('snd.ws', true) or current_setting('snd.ws', true) = '*');
 ${TABLES.map(CAPTURE).join(';\n')};
+-- CREATE TABLE IF NOT EXISTS cannot upgrade a database made by an earlier schema. Every record is synthetic and
+-- disposable, so instead of migrating, refuse to start on one (Codex R9-3).
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'executions_approval_id_key')
+    or not exists (select 1 from pg_constraint where conname = 'approvals_workspace_id_simulation_id_fkey') then
+    raise exception 'This database was created by an earlier SOUNDING schema. Its data is synthetic: recreate the database, then start again.';
+  end if;
+end $$;
 `;
 
 /** Business triggers expected on the schema; the fingerprint covers these and every trigger function body. */

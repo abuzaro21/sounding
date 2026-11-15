@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import pg from 'pg';
 import { setup, newWs, digest, count, approvedPurge, receipt, URL } from './helpers.ts';
 import type { Effect } from '../src/effects.ts';
+import { Db } from '../src/db.ts';
 
 const { db, engine } = await setup();
 after(() => db.close());
@@ -77,7 +78,7 @@ test('an old simulation cannot be approved', async () => {
 
 test('FAILURE TEST: a dependency created after the simulation is caught by the verifier and rolled back', async () => {
   const ws = await newWs(engine);
-  const { b, apr } = await approvedPurge(engine, ws);
+  const { b, s2, apr } = await approvedPurge(engine, ws);
   const drift = await engine.drift(ws, 'new_order') as { customer: string; order: string };
   const before = await digest(db, ws);
   const x = await engine.execute(ws, apr.id, apr.nonce, 'op');
@@ -92,6 +93,8 @@ test('FAILURE TEST: a dependency created after the simulation is caught by the v
   assert.equal(r.intact.intact, r.intact.checked);
   assert.deepEqual(await digest(db, ws), before, 'nothing committed');
   assert.equal(await count(db, ws, 'select count(*) as n from customers where workspace_id = $1 and id = any($2)', [b.spec.target_ids]), b.spec.target_ids.length);
+  // The failed approval's simulation cannot be approved again: only a new simulation can (Codex R9-4).
+  await assert.rejects(engine.approve(ws, String(s2.id), 'op'), /already has an approval/);
   // Recovery: simulate again on current state, the agent excludes the customer, the new plan commits.
   const s3 = await engine.simulate(ws, b.id);
   assert.equal(s3.verdict, 'blocked');
@@ -244,6 +247,43 @@ test('an execution interrupted by process death is reconciled at start-up', asyn
   const [a] = await db.q<{ status: string; outcome: string }>(ws, 'select status, outcome from approvals where id = $1', [apr.id]);
   assert.deepEqual(a, { status: 'failed', outcome: 'interrupted' });
   await assert.rejects(engine.execute(ws, apr.id, apr.nonce, 'op'), /single-use/);
+});
+
+test('reconciliation follows the receipt: a refused one fails the approval, it does not consume it (Codex R9-7)', async () => {
+  const ws = await newWs(engine);
+  const { a, s2, apr } = await approvedPurge(engine, ws);
+  // The state a lost connection leaves: a refusal receipt was written, the approval was not yet updated.
+  await db.q(ws, `update approvals set status = 'executing' where id = $1`, [apr.id]);
+  await db.q(ws, `insert into executions (id, workspace_id, approval_id, simulation_id, action_id, status, receipt) values ($5, $1, $2, $3, $4, 'refused', '{}')`, [ws, apr.id, s2.id, a.id, `ex_${apr.id.slice(-12)}`]);
+  // Periodic passes skip approvals that a live execution could still hold; this one has not expired.
+  const st = async () => (await db.q<{ status: string }>(ws, 'select status from approvals where id = $1', [apr.id]))[0].status;
+  await engine.recoverInterrupted(120_000);
+  assert.equal(await st(), 'executing');
+  await engine.recoverInterrupted();
+  const [x] = await db.q<{ status: string; outcome: string }>(ws, 'select status, outcome from approvals where id = $1', [apr.id]);
+  assert.deepEqual(x, { status: 'failed', outcome: 'refused' });
+});
+
+test('reconciliation defers an approval whose execution lock is held, and finishes it later (Codex R9-10)', async () => {
+  const ws = await newWs(engine);
+  const { apr } = await approvedPurge(engine, ws);
+  await db.q(ws, `update approvals set status = 'executing' where id = $1`, [apr.id]);
+  const holder = new pg.Client({ connectionString: URL });
+  await holder.connect();
+  try {
+    await holder.query('begin');
+    await holder.query('select pg_advisory_xact_lock(hashtext($1))', [`exec:${ws}`]);
+    await engine.recoverInterrupted(); // busy: deferred, no error
+    assert.equal((await db.q<{ status: string }>(ws, 'select status from approvals where id = $1', [apr.id]))[0].status, 'executing');
+  } finally { await holder.query('rollback').catch(() => 0); await holder.end(); }
+  await engine.recoverInterrupted();
+  assert.equal((await db.q<{ status: string }>(ws, 'select status from approvals where id = $1', [apr.id]))[0].status, 'failed');
+});
+
+test('an external Render database URL must request TLS (Codex R9-5)', () => {
+  assert.throws(() => new Db('postgres://u:p@dpg-x.oregon-postgres.render.com/db'), /sslmode=verify-full/);
+  new Db('postgres://u:p@dpg-x.oregon-postgres.render.com/db?sslmode=verify-full').close();
+  new Db('postgres://u:p@dpg-x-a/db').close(); // the internal URL stays on the private network
 });
 
 test('workspaces are isolated: by query scope and by row-level security', async () => {

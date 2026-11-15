@@ -1,0 +1,16 @@
+{
+  "voice": "af_heart",
+  "speed": 1.08,
+  "segments": [
+    { "id": "intent", "text": "An agent is asked to remove inactive customer accounts. It expects to delete forty-eight rows." },
+    { "id": "measure", "text": "SOUNDING runs that exact deletion in a transaction that can only roll back, and measures what really moved: two hundred and eighty-nine row changes in ten tables. Cascades, broken links, messages to outside providers." },
+    { "id": "blocked", "text": "Policy blocks it: unpaid invoices, live subscriptions, records the law says to keep. The agent narrows its own plan from that evidence, and simulates again." },
+    { "id": "approve", "text": "Now it's safe. Approval isn't a yes button: it signs this exact set of effects, with a one-time token that expires in five minutes." },
+    { "id": "drift", "text": "Then the world moves. A customer phones in an order, and I execute anyway. The verifier finds three changes nobody approved." },
+    { "id": "rollback", "text": "It rolls back before commit, and proves that every row it touched is intact." },
+    { "id": "commit", "text": "Simulate again, on what is true now. Narrow, approve, execute. Committed, and every check verified." },
+    { "id": "restore", "text": "Even the undo goes through the same gate. Queued messages are cancelled for real; anything already sent is admitted, not hidden." },
+    { "id": "evidence", "text": "Across forty seeded scenarios: every committed effect predicted exactly, twenty-five of twenty-five drifts caught, zero unsafe commits." },
+    { "id": "end", "text": "SOUNDING. See the consequences before they become real." }
+  ]
+}

@@ -53,7 +53,7 @@ Tests: `workspaces are isolated: by query scope and by row-level security` (a ra
 
 ## Database connection
 
-TLS follows the `sslmode` in `DATABASE_URL`, with certificate verification. An earlier version turned TLS on for any `render.com` host with `rejectUnauthorized: false`; that was removed. On Render the internal URL is used and stays inside Render's private network.
+TLS follows the `sslmode` in `DATABASE_URL`, with certificate verification. An earlier version turned TLS on for any `render.com` host with `rejectUnauthorized: false`; that was removed. An external Render hostname (`*.render.com`) without `sslmode=require`, `verify-ca` or `verify-full` is refused at start-up, so it can never connect in plaintext. On Render the internal URL is used and stays inside Render's private network.
 
 ## Secrets
 
@@ -66,3 +66,5 @@ TLS follows the `sslmode` in `DATABASE_URL`, with certificate verification. An e
 - The operator is the browser session. There is no account system, because every visitor operates only their own throwaway synthetic workspace.
 - In the demo, one database role owns the schema and runs the app ([ADR-007](ARCHITECTURE-DECISIONS.md)). A visitor has no way to issue DDL, and the schema fingerprint refuses execution after any schema change. A production deployment should split the migration and runtime roles.
 - The rate limiter is in memory and per process. That is enough for one free instance.
+- The history quota is checked before the write, not atomically with it, so concurrent requests from one workspace can overshoot it by at most the 3 operations admitted at once. Accepted (Codex R9-4): the overshoot is bounded, and approvals are bounded by simulations (one each).
+- A database created by an earlier schema version is not migrated: start-up refuses it and asks for it to be recreated. Every record is synthetic, so nothing is lost.

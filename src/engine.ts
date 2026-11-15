@@ -277,8 +277,10 @@ export class Engine {
         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [sid, ws, aid, a.spec_hash, run.fp, JSON.stringify(run.versions), JSON.stringify(effects), digest, JSON.stringify(report), policy.verdict, JSON.stringify(durable)]);
       // Only the latest simulation of an action may be acted on: an approval of an older one is revoked (Codex R6-6).
+      // Strictly older ones, in the same order "latest" uses, so a slow older simulation cannot revoke a newer approval (Codex R9-8).
       await this.db.q(ws, `update approvals set status = 'rejected', outcome = 'superseded by a newer simulation' where workspace_id = $1 and status = 'approved'
-        and simulation_id in (select id from simulations where workspace_id = $1 and action_id = $2 and id <> $3)`, [ws, aid, sid]);
+        and simulation_id in (select o.id from simulations o, simulations me where o.workspace_id = $1 and o.action_id = $2 and me.workspace_id = $1 and me.id = $3
+          and (o.created_at, o.id) < (me.created_at, me.id))`, [ws, aid, sid]);
       await this.audit(ws, 'simulation.completed', { simulation: sid, action: aid, verdict: policy.verdict, effects: effects.length, digest, unchanged: durable.unchanged });
       return this.simulation(ws, sid);
     });
@@ -310,7 +312,7 @@ export class Engine {
     if (a.status !== 'proposed') throw new HttpError(409, 'not-approvable', `This action is ${a.status}.`);
     if (s.verdict !== 'safe') throw new HttpError(409, 'blocked', 'The simulation found policy violations. This plan cannot be approved; narrow it and simulate again.');
     if (Date.now() - Date.parse(String(s.created_at)) > this.o.simTtlMs) throw new HttpError(409, 'stale-simulation', 'This simulation is older than 10 minutes. Simulate again against the current data.');
-    const [latest] = await this.db.q<{ id: string }>(ws, 'select id from simulations where workspace_id = $1 and action_id = $2 order by created_at desc limit 1', [ws, a.id]);
+    const [latest] = await this.db.q<{ id: string }>(ws, 'select id from simulations where workspace_id = $1 and action_id = $2 order by created_at desc, id desc limit 1', [ws, a.id]);
     if (latest.id !== sid) throw new HttpError(409, 'stale-simulation', 'A newer simulation of this action exists; review that one.');
     const nonce = randomBytes(18).toString('base64url');
     const expires = new Date(Date.now() + this.o.approvalTtlMs).toISOString();
@@ -323,7 +325,7 @@ export class Engine {
       await this.db.q(ws, `insert into approvals (id, workspace_id, simulation_id, operator, binding, binding_hash, nonce, status, expires_at) values ($1,$2,$3,$4,$5,$6,$7,'approved',$8)`,
         [apr, ws, sid, operator, JSON.stringify(binding), this.#bindingHash(binding), sha(nonce), expires]);
     } catch (e) {
-      if ((e as { code?: string }).code === '23505') throw new HttpError(409, 'already-approved', 'This simulation already has an approval.');
+      if ((e as { code?: string }).code === '23505') throw new HttpError(409, 'already-approved', 'This simulation already has an approval. Approvals are single-use: simulate again for a new one.');
       throw e;
     }
     await this.audit(ws, 'approval.granted', { approval: apr, simulation: sid, operator, effect_digest: s.effect_digest, expires_at: expires });
@@ -415,7 +417,8 @@ export class Engine {
         const policyOk = policy.verdict === 'safe';
         checks.push({ name: 'policy on actual effects', ok: policyOk, detail: policyOk ? `${POLICY_VERSION}: no violations` : policy.findings.filter((f) => f.severity === 'block').map((f) => f.rule).join(', ') });
         if (!checks.every((c) => c.ok)) throw new VerifyFailed({ checks, cmp, policy, pre: pre!, attempted: actual });
-        const receipt = { ...base, status: 'committed', checks, pre_state: pre!.digest, post_state: post.digest, summary: summarize(actual), effects: actual.length, ms: Date.now() - t0 };
+        const receipt = { ...base, status: 'committed', checks, pre_state: pre!.digest, post_state: post.digest, summary: summarize(actual), effects: actual.length, ms: Date.now() - t0,
+          ...(applied.restore ? { irreversible: applied.restore.irreversible } : {}) }; // messages already delivered: compensated, not unsent (Codex R9-11)
         const recoverable = a.spec.template !== 'restore_execution';
         await q(`insert into executions (id, workspace_id, approval_id, simulation_id, action_id, status, receipt, recovery, recovery_status, recovery_expires_at)
           values ($1,$2,$3,$4,$5,'committed',$6,$7,$8,$9)`,
@@ -447,7 +450,7 @@ export class Engine {
         const [x] = await this.db.tx(ws, async (q) => {
           await q('select pg_advisory_xact_lock(hashtext($1))', [`exec:${ws}`]);
           return q<Row>('select id from executions where workspace_id = $1 and id = $2', [ws, eid]);
-        }, { lockMs: 30_000 }).catch(() => { throw new HttpError(503, 'outcome-unknown', 'The outcome of this execution is not known yet. Reload in a minute: the receipt will say.'); });
+        }, { lockMs: 30_000, statementMs: 35_000 }).catch(() => { throw new HttpError(503, 'outcome-unknown', 'The outcome of this execution is not known yet. Reload in a few minutes: the receipt will say.'); });
         if (x) { await this.db.q(ws, `update approvals set status = 'consumed', outcome = 'committed (confirmed after connection loss)' where id = $1`, [apr.id]); return this.execution(ws, eid); }
         // Not ours, but another process (start-up reconciliation) may already have recorded the outcome for this approval.
         const [theirs] = await this.db.q<Row>(ws, 'select id from executions where workspace_id = $1 and approval_id = $2', [ws, apr.id]);
@@ -490,9 +493,16 @@ export class Engine {
       comparison: v ? { unexpected: cap(v.cmp.unexpected), missing: cap(v.cmp.missing), changed: v.cmp.changed.slice(0, 30), counts: { unexpected: v.cmp.unexpected.length, missing: v.cmp.missing.length, changed: v.cmp.changed.length } } : null,
       policy: v?.policy ?? null, next: 'Simulate again against the current data; a new approval is required.',
     };
-    await this.db.q(ws, `insert into executions (id, workspace_id, approval_id, simulation_id, action_id, status, receipt) values ($1,$2,$3,$4,$5,$6,$7)`,
-      [eid, ws, apr.id, base.simulation_id, a.id, status, JSON.stringify(receipt)]);
-    await this.db.q(ws, `update approvals set status = 'failed', outcome = $2 where id = $1`, [apr.id, status]);
+    // Under the execution lock, and at most one receipt per approval: if reconciliation recorded one first, that one stands (Codex R9-6).
+    const winner = await this.db.tx(ws, async (q) => {
+      await q('select pg_advisory_xact_lock(hashtext($1))', [`exec:${ws}`]);
+      const [mine] = await q(`insert into executions (id, workspace_id, approval_id, simulation_id, action_id, status, receipt) values ($1,$2,$3,$4,$5,$6,$7)
+        on conflict (approval_id) do nothing returning id`, [eid, ws, apr.id, base.simulation_id, a.id, status, JSON.stringify(receipt)]);
+      if (!mine) return String((await q<Row>('select id from executions where workspace_id = $1 and approval_id = $2', [ws, apr.id]))[0].id);
+      await q(`update approvals set status = 'failed', outcome = $2 where id = $1 and status = 'executing'`, [apr.id, status]);
+      return eid;
+    }, { lockMs: 30_000, statementMs: 35_000 });
+    if (winner !== eid) return this.execution(ws, winner);
     await this.audit(ws, `execution.${status}`, { execution: eid, approval: apr.id, reason, state_restored: receipt.state_restored });
     return this.execution(ws, eid);
   }
@@ -503,27 +513,40 @@ export class Engine {
     return x;
   }
 
-  /** On start-up: an approval left 'executing' by a dead process either committed (receipt exists) or rolled back. */
-  async recoverInterrupted() {
-    const stuck = await this.db.q<Row>('*', `select a.id, a.workspace_id, a.simulation_id, exists(select 1 from executions e where e.approval_id = a.id and e.status = 'committed') as done
-      from approvals a where a.status = 'executing'`);
+  /**
+   * An approval left 'executing' by a dead process or a lost connection either has a receipt or rolled back.
+   * At start-up every such approval is checked; periodically (`minAgeMs`) only ones claimed long enough ago that no live
+   * execution can still hold them: a claim needs an unexpired approval, so expiry plus minAgeMs bounds the claim's age.
+   */
+  async recoverInterrupted(minAgeMs = 0) {
+    const stuck = await this.db.q<Row>('*', `select a.id, a.workspace_id, a.simulation_id from approvals a where a.status = 'executing'
+      and ($1 = 0 or a.expires_at < now() - make_interval(secs => $1))`, [minAgeMs / 1000]);
+    let done = 0;
     for (const s of stuck) {
       const ws = String(s.workspace_id);
       // Under the execution lock and the approval row lock: a live execution in another process has either finished (its
       // receipt is visible) or not begun its transaction, and will then find the claim resolved (Codex R6-2).
       await this.db.tx(ws, async (q) => {
         await q('select pg_advisory_xact_lock(hashtext($1))', [`exec:${ws}`]);
-        const [now] = await q<Row>(`select a.status, exists(select 1 from executions e where e.workspace_id = a.workspace_id and e.approval_id = a.id) as receipt,
+        const [now] = await q<Row>(`select a.status, (select e.status from executions e where e.workspace_id = a.workspace_id and e.approval_id = a.id) as receipt,
           (select action_id from simulations m where m.workspace_id = a.workspace_id and m.id = a.simulation_id) as action_id
           from approvals a where a.workspace_id = $1 and a.id = $2 for update`, [ws, s.id]);
         if (now?.status !== 'executing') return;
-        if (now.receipt) { await q(`update approvals set status = 'consumed', outcome = 'committed (reconciled at start-up)' where id = $1`, [s.id]); return; }
+        // A receipt says what happened; only a committed one consumes the approval (Codex R9-7).
+        if (now.receipt) {
+          await q(now.receipt === 'committed' ? `update approvals set status = 'consumed', outcome = 'committed (reconciled)' where id = $1`
+            : `update approvals set status = 'failed', outcome = $2 where id = $1`, now.receipt === 'committed' ? [s.id] : [s.id, now.receipt]);
+          return;
+        }
         await q(`insert into executions (id, workspace_id, approval_id, simulation_id, action_id, status, receipt) values ($1,$2,$3,$4,$5,'rolled_back',$6)`,
           [id('exe'), ws, s.id, s.simulation_id, now.action_id, JSON.stringify({ status: 'rolled_back', reason: 'The server stopped during execution. No receipt was committed, so PostgreSQL rolled the transaction back.', next: 'Simulate again.' })]);
         await q(`update approvals set status = 'failed', outcome = 'interrupted' where id = $1`, [s.id]);
+      }, { lockMs: 3_000 }).then(() => { done++; }, (e) => {
+        // A live execution holds the lock: leave it to that execution, or to the next periodic pass (Codex R9-10).
+        if ((e as { code?: string }).code !== '55P03') throw e;
       });
     }
-    return stuck.length;
+    return done;
   }
 
   // ---------- the rest of the business, meanwhile ----------

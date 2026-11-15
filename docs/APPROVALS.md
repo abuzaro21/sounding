@@ -44,13 +44,13 @@ returning *
 
 Only one caller can move a row from `approved` to `executing`. A double click, a replay, a second tab or a concurrent request gets 409 `approval-unusable`, with the reason: "No such approval", "belongs to another operator session", "already executing / consumed / failed; approvals are single-use", "expired" or "token does not match". An approval of another workspace is indistinguishable from one that does not exist.
 
-The claim happens only after the server admits the request; a `503 busy` leaves the approval `approved`. After the claim, the approval ends as `consumed` (committed) or `failed` (refused or rolled back). It never returns to `approved`. A failed execution needs a new simulation and a new approval.
+The claim happens only after the server admits the request; a `503 busy` leaves the approval `approved`. After the claim, the approval ends as `consumed` (committed) or `failed` (refused or rolled back). It never returns to `approved`. A failed execution needs a new simulation and a new approval: a unique index allows one approval per simulation (rejected ones aside), so the refused simulation cannot be approved again. That also bounds approvals and executions by the simulation quota.
 
 ## Invalidation
 
 - **Modify.** Narrowing by the agent, or an edit by the operator, supersedes the action and sets any open approval of it to `rejected` ("superseded by a modified action").
 - **Reject.** Rejects the action and revokes its approvals.
-- **Re-simulate.** Simulating an action again revokes every live approval of its older simulations. Execution also requires its simulation to still be the latest one.
+- **Re-simulate.** Simulating an action again revokes every live approval of its strictly older simulations (ordered by `(created_at, id)`), never of a newer one. Execution also requires its simulation to still be the latest one.
 - **Races.** Edit, reject and execution take the same action row lock. An edit or rejection that arrives while the action is executing waits, then gets 409 "This action is no longer open".
 - **Expiry.** Enforced in the claim (`expires_at > now()`).
 - **Staleness.** Execution rebuilds the binding from the stored records (effect digest recomputed from the stored effects, spec hash recomputed from the stored action) and compares it with the signed one, then checks the HMAC. Evidence swapped in storage under an intact signature is refused. Then, inside the execution transaction, it re-checks the schema fingerprint and the live row versions (see [EXECUTION-VERIFICATION](EXECUTION-VERIFICATION.md)).

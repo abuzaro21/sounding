@@ -8,7 +8,7 @@
 | Reviewed | commit `42faa18` |
 | Prompt | [R7-codex.prompt.md](R7-codex.prompt.md) |
 
-**Every fix below was made after this review, in commit FIX_COMMIT, and was not reviewed by Codex in this pass.** The final diff review (R9) covers them.
+**Every fix below was made after this review, in commit `60b23b7`, and was not reviewed by Codex in this pass.** The final diff review (R9) covers them.
 
 ## Triage
 
