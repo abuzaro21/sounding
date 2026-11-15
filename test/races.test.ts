@@ -137,9 +137,12 @@ test('workspace capacity holds under concurrent session creation (Codex R7-4)', 
 test('a workspace has a bounded history (Codex R7-1)', async () => {
   const { QUOTA } = await import('../src/engine.ts');
   const ws = await newWs(engine);
-  await db.q(ws, `insert into audit (workspace_id, seq, type, data, prev_hash, hash)
-    select $1, 1000 + g, 'drift.new_order', '{}', 'x', 'x' from generate_series(1, $2) g`, [ws, QUOTA.drifts]);
-  await assert.rejects(engine.drift(ws, 'ledger_mirroring'), /history limit/);
+  // Codex R10-2: concurrent requests at the last free slot; exactly one gets it.
+  await db.q(ws, 'update workspaces set used_drifts = $2, used_acts = $3 where id = $1', [ws, QUOTA.drifts - 1, QUOTA.actions]);
+  const res = await Promise.allSettled([1, 2, 3, 4, 5].map(() => engine.drift(ws, 'ledger_mirroring')));
+  assert.equal(res.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.ok(res.filter((r) => r.status === 'rejected').every((r) => /history limit/.test(String((r as PromiseRejectedResult).reason))));
+  assert.equal((await db.q<{ n: number }>(ws, 'select used_drifts as n from workspaces where id = $1', [ws]))[0].n, QUOTA.drifts, 'no overshoot');
   await assert.rejects(engine.propose(ws, { intent: 'Cancel unpaid orders older than 14 days' }, 'op'), /history limit/);
   await engine.reset(ws);
   assert.ok(await engine.propose(ws, { intent: 'Cancel unpaid orders older than 14 days' }, 'op'), 'Reset clears it');

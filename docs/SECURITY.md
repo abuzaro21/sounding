@@ -39,7 +39,7 @@ Tests: `workspaces are isolated: by query scope and by row-level security` (a ra
   | Simulate and execute | 0.5/s | 20 |
   | New workspaces | 1 per 30 s | 6 |
 
-  Plus at most 3 concurrent heavy operations per process (simulate, execute, reset, workspace creation), checked **before** an approval is claimed, so a refused visitor keeps a usable approval. The bucket table is capped at 10 000 addresses; when it is full, unseen addresses share one overflow bucket and no existing budget is ever renewed. Also a cap of 150 workspaces (idle ones are purged first; the count and the insert happen under one advisory lock, so concurrent sessions cannot overshoot it), a history quota per workspace (40 simulations, 120 actions, 40 drift events; Reset clears it), and statement (8 s; 10 s for execution), lock (3 s) and idle-in-transaction (20 s) timeouts on every transaction.
+  Plus at most 3 concurrent heavy operations per process (simulate, execute, reset, workspace creation), checked **before** an approval is claimed, so a refused visitor keeps a usable approval. The bucket table is capped at 10 000 addresses; when it is full, unseen addresses share one overflow bucket and no existing budget is ever renewed. Also a cap of 150 workspaces (idle ones are purged first; the count and the insert happen under one advisory lock, so concurrent sessions cannot overshoot it), a history quota per workspace (40 simulations, 120 actions, 40 drift events), reserved by one conditional `UPDATE` before each write so concurrent requests cannot overshoot it; approvals are bounded by simulations (one each); Reset clears it, and statement (8 s; 10 s for execution), lock (3 s) and idle-in-transaction (20 s) timeouts on every transaction.
 - **Headers.** CSP `default-src 'self'` with `frame-ancestors 'none'`, `object-src 'none'` and `base-uri 'none'`, plus `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, COOP `same-origin` and a Permissions-Policy. API responses are `no-store`.
 - **Errors.** Errors are generic 500 messages with no stack trace. Logs never contain request bodies.
 - **Relaxed limits** (`SND_RELAXED_LIMITS=1`) exist for tests. The server refuses to start with them when `NODE_ENV=production`.
@@ -53,7 +53,7 @@ Tests: `workspaces are isolated: by query scope and by row-level security` (a ra
 
 ## Database connection
 
-TLS follows the `sslmode` in `DATABASE_URL`, with certificate verification. An earlier version turned TLS on for any `render.com` host with `rejectUnauthorized: false`; that was removed. An external Render hostname (`*.render.com`) without `sslmode=require`, `verify-ca` or `verify-full` is refused at start-up, so it can never connect in plaintext. On Render the internal URL is used and stays inside Render's private network.
+TLS follows the `sslmode` in `DATABASE_URL`, with certificate verification. An earlier version turned TLS on for any `render.com` host with `rejectUnauthorized: false`; that was removed. An external Render hostname (`*.render.com`) without TLS is refused at start-up, so it can never connect in plaintext. The check reads the URL with `pg-connection-string`, the parser pg itself uses, so overrides such as `?host=` or a repeated `sslmode` are judged as pg will apply them. A malformed URL produces an error that does not repeat it, because it holds the password. On Render the internal URL is used and stays inside Render's private network.
 
 ## Secrets
 
@@ -66,5 +66,4 @@ TLS follows the `sslmode` in `DATABASE_URL`, with certificate verification. An e
 - The operator is the browser session. There is no account system, because every visitor operates only their own throwaway synthetic workspace.
 - In the demo, one database role owns the schema and runs the app ([ADR-007](ARCHITECTURE-DECISIONS.md)). A visitor has no way to issue DDL, and the schema fingerprint refuses execution after any schema change. A production deployment should split the migration and runtime roles.
 - The rate limiter is in memory and per process. That is enough for one free instance.
-- The history quota is checked before the write, not atomically with it, so concurrent requests from one workspace can overshoot it by at most the 3 operations admitted at once. Accepted (Codex R9-4): the overshoot is bounded, and approvals are bounded by simulations (one each).
 - A database created by an earlier schema version is not migrated: start-up refuses it and asks for it to be recreated. Every record is synthetic, so nothing is lost.

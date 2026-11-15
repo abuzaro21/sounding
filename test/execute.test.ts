@@ -284,6 +284,12 @@ test('an external Render database URL must request TLS (Codex R9-5)', () => {
   assert.throws(() => new Db('postgres://u:p@dpg-x.oregon-postgres.render.com/db'), /sslmode=verify-full/);
   new Db('postgres://u:p@dpg-x.oregon-postgres.render.com/db?sslmode=verify-full').close();
   new Db('postgres://u:p@dpg-x-a/db').close(); // the internal URL stays on the private network
+  // Codex R10-3: overrides that pg honours are checked as pg reads them.
+  assert.throws(() => new Db('postgres://u:p@dpg-x.oregon-postgres.render.com/db?sslmode=verify-full&sslmode=disable'), /sslmode=verify-full/);
+  assert.throws(() => new Db('postgres://u:p@localhost/db?host=dpg-x.oregon-postgres.render.com'), /sslmode=verify-full/);
+  // Codex R10-4: a malformed URL never echoes its password.
+  try { new Db('postgres://u:hunter2-secret@[broken/db'); assert.fail('accepted'); }
+  catch (e) { assert.doesNotMatch(JSON.stringify(e, Object.getOwnPropertyNames(e)) + String((e as Error).stack), /hunter2-secret/); }
 });
 
 test('workspaces are isolated: by query scope and by row-level security', async () => {

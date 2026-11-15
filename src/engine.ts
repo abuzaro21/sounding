@@ -93,7 +93,10 @@ export class Engine {
   async reset(ws: string) {
     const [w] = await this.db.q<{ token_hash: string }>('*', 'select token_hash from workspaces where id = $1', [ws]);
     if (!w) throw new HttpError(404, 'no-workspace', 'Workspace not found.');
-    await this.#gate(() => this.db.tx(ws, (q) => this.#seed(q, ws, w.token_hash), { statementMs: 20_000 }));
+    await this.#gate(() => this.db.tx(ws, async (q) => {
+      await this.#seed(q, ws, w.token_hash);
+      await q('update workspaces set used_sims = 0, used_acts = 0, used_drifts = 0 where id = $1', [ws]);
+    }, { statementMs: 20_000 }));
     await this.audit(ws, 'workspace.reset', {});
   }
   async purgeIdle(idleMs = this.o.idleMs) {
@@ -107,11 +110,11 @@ export class Engine {
   }
 
   /** A bounded history per workspace, so one visitor cannot fill the shared database (Codex R7-1). Reset clears it. */
-  async #quota(ws: string) {
-    const [u] = await this.db.q<{ sims: number; acts: number; drifts: number }>(ws, `select
-      (select count(*)::int from simulations where workspace_id = $1) as sims, (select count(*)::int from actions where workspace_id = $1) as acts,
-      (select count(*)::int from audit where workspace_id = $1 and type like 'drift.%') as drifts`, [ws]);
-    if (u.sims >= QUOTA.simulations || u.acts >= QUOTA.actions || u.drifts >= QUOTA.drifts)
+  // One conditional UPDATE reserves the slot, so concurrent requests cannot overshoot (Codex R10-2). A slot stays used if the write fails.
+  async #quota(ws: string, kind: keyof typeof QUOTA) {
+    const col = { simulations: 'used_sims', actions: 'used_acts', drifts: 'used_drifts' }[kind];
+    const ok = await this.db.q(ws, `update workspaces set ${col} = ${col} + 1 where id = $1 and ${col} < $2 returning 1`, [ws, QUOTA[kind]]);
+    if (!ok.length)
       throw new HttpError(429, 'workspace-full', `This workspace has reached its history limit (${QUOTA.simulations} simulations, ${QUOTA.actions} actions, ${QUOTA.drifts} business events). Reset data to start fresh.`);
   }
 
@@ -152,7 +155,7 @@ export class Engine {
     return this.#storeAction(ws, spec, origin, intent, parentId, rationale ?? `Compiled as: ${reading}.`);
   }
   async #storeAction(ws: string, spec: Spec, origin: string, intent: string, parentId?: string, rationale?: string) {
-    await this.#quota(ws);
+    await this.#quota(ws, 'actions');
     const aid = id('act');
     const exp = expectation(spec);
     await this.db.q(ws, `insert into actions (id, workspace_id, parent_id, origin, intent, spec, spec_hash, expectation, rationale) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -225,7 +228,7 @@ export class Engine {
   async simulate(ws: string, aid: string) {
     const a = await this.action(ws, aid);
     if (a.status !== 'proposed') throw new HttpError(409, 'not-simulatable', `This action is ${a.status}; propose a new one.`);
-    await this.#quota(ws);
+    await this.#quota(ws, 'simulations');
     return this.#gate(async () => {
       const r = await this.#runner(ws, a.spec);
       const sid = id('sim'), t0 = Date.now();
@@ -553,7 +556,7 @@ export class Engine {
   /** Ordinary business activity in the visitor's own workspace, committed normally (no capture), to create drift. */
   async drift(ws: string, kind: string) {
     if (!['ledger_mirroring', 'new_order', 'reopen_case'].includes(kind)) throw new HttpError(400, 'bad-drift', 'Unknown drift.');
-    await this.#quota(ws);
+    await this.#quota(ws, 'drifts');
     const [s] = await this.db.q<Row>(ws, `select s.id, s.effects, a.spec from simulations s join actions a on a.id = s.action_id
       where s.workspace_id = $1 and s.verdict = 'safe' and a.status = 'proposed' and a.spec->>'template' = 'purge_inactive_customers' order by s.created_at desc limit 1`, [ws]);
     if (kind === 'ledger_mirroring') {

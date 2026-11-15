@@ -1,6 +1,7 @@
 // PostgreSQL access. Every business transaction is opened through tx(), which pins the workspace (row-level security
 // reads snd.ws), the isolation level and statement/lock timeouts, so no code path can touch rows without a scope.
 import pg from 'pg';
+import { parse } from 'pg-connection-string';
 import { DDL, SCHEMA_TABLES } from './schema.ts';
 
 export type Q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<T[]>;
@@ -13,9 +14,11 @@ export class CommitUnknown extends Error { cause: unknown; constructor(cause: un
 export class Db {
   pool: pg.Pool;
   constructor(url: string, max = 6) {
-    // An external Render hostname without sslmode would connect in plaintext; require TLS to be explicit (Codex R9-5).
-    const u = new URL(url);
-    if (/\.render\.com$/i.test(u.hostname) && !/^(require|verify-ca|verify-full)$/.test(u.searchParams.get('sslmode') ?? ''))
+    // An external Render host without TLS would connect in plaintext (Codex R9-5). Checked on the configuration pg itself
+    // derives, with pg's own parser, so query overrides such as ?host= or a repeated sslmode cannot slip past (Codex R10-3).
+    let c: ReturnType<typeof parse>;
+    try { c = parse(url); } catch { throw new Error('DATABASE_URL is not a valid PostgreSQL connection string.'); } // never echo the URL: it holds the password (Codex R10-4)
+    if (/\.render\.com$/i.test(c.host ?? '') && !c.ssl)
       throw new Error('An external Render database URL needs ?sslmode=verify-full. Prefer the internal URL, which stays on the private network.');
     this.pool = new pg.Pool({
       // TLS comes from the URL's sslmode, with certificate verification (Codex R7-2). On Render the internal URL is used.

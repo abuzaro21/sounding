@@ -208,9 +208,9 @@ try {
   await scrollTo(page, page.getByRole('heading', { name: 'Committed and verified' }), 90, 700);
 
   // 8. Restore through the same gate.
-  await S('restore', 0.6); await click(page, page.getByRole('button', { name: 'Plan a restoration' }), 600);
+  await S('restore', 0.2); await click(page, page.getByRole('button', { name: 'Plan a restoration' }), 500);
   await verdict(/Safe to approve/).waitFor();
-  await S('restore', 2.4); await click(page, page.getByRole('button', { name: /^Approve \d+ changes$/ }), 500);
+  await click(page, page.getByRole('button', { name: /^Approve \d+ changes$/ }), 450);
   await click(page, page.getByRole('button', { name: 'Execute' }), 500);
   await page.getByRole('heading', { name: 'Committed and verified' }).waitFor();
   await S('restore', 5.2); await hover(page, page.getByText(/cancelled before dispatch/), 700);

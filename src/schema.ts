@@ -38,6 +38,9 @@ create table if not exists workspaces (
   created_at timestamptz not null default now(),
   last_seen timestamptz not null default now()
 );
+-- History quota, reserved atomically before each write (Codex R9-4, R10-2). Reset sets it back to zero.
+alter table workspaces add column if not exists used_sims int not null default 0, add column if not exists used_acts int not null default 0,
+  add column if not exists used_drifts int not null default 0;
 
 create table if not exists customers (
   workspace_id text not null references workspaces(id) on delete cascade,
@@ -309,8 +312,10 @@ ${TABLES.map(CAPTURE).join(';\n')};
 -- CREATE TABLE IF NOT EXISTS cannot upgrade a database made by an earlier schema. Every record is synthetic and
 -- disposable, so instead of migrating, refuse to start on one (Codex R9-3).
 do $$ begin
-  if not exists (select 1 from pg_constraint where conname = 'executions_approval_id_key')
-    or not exists (select 1 from pg_constraint where conname = 'approvals_workspace_id_simulation_id_fkey') then
+  -- Each constraint is looked up on its own table in this schema, not by name anywhere (Codex R10-1).
+  if exists (select 1 from (values ('actions', 'actions_workspace_id_id_key'), ('approvals', 'approvals_workspace_id_id_key'), ('approvals', 'approvals_workspace_id_simulation_id_fkey'), ('executions', 'executions_approval_id_key'), ('executions', 'executions_workspace_id_action_id_fkey'), ('executions', 'executions_workspace_id_approval_id_fkey'), ('executions', 'executions_workspace_id_simulation_id_fkey'), ('simulations', 'simulations_workspace_id_action_id_fkey'), ('simulations', 'simulations_workspace_id_id_key')) need(tbl, con)
+      where not exists (select 1 from pg_constraint where conrelid = to_regclass(need.tbl) and conname = need.con))
+    or to_regclass('approvals_one_per_simulation') is null then
     raise exception 'This database was created by an earlier SOUNDING schema. Its data is synthetic: recreate the database, then start again.';
   end if;
 end $$;
