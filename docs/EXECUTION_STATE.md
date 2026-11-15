@@ -34,7 +34,7 @@ Status values: **PASS** (evidence linked and re-runnable), **OPEN** (not done), 
 | R2–R3–R8 | simulator, side effects, eval honesty | `42faa18` | 7 | 7 fixed in `60b23b7` |
 | R4–R5–R6 | approvals, execution, rollback, concurrency | `42faa18` | 12 | 11 fixed, 1 claim narrowed, in `60b23b7` |
 | R7 | API security, isolation | `42faa18` | 10 | 9 fixed in `60b23b7`, 1 accepted risk (ADR-007) |
-| R9 | final diff `42faa18..60b23b7` | `60b23b7` | 11 | 10 fixed in `9f31314`; R9-3/4/5 completed after R10 |
-| R10 | verification `60b23b7..9f31314` | `9f31314` | 8 complete, 3 partial, 1 new | all 4 fixed in FIX_COMMIT, not Codex-reviewed |
+| R9 | final diff `42faa18..60b23b7` | `60b23b7` | 11 | 11 fixed in `9f31314`; R10 found R9-3/4/5 partial |
+| R10 | verification `60b23b7..9f31314` | `9f31314` | 8 complete, 3 partial, 1 new | all 4 fixed in `8d8bd3f`, not Codex-reviewed |
 
-The fixes in `60b23b7` were made after the reviews of `42faa18`; R9 reviewed them. **The R9 fixes (`9f31314`) were made after R9 and have not been reviewed by Codex.** Their evidence is the tests named in [R9-codex.md](reviews/R9-codex.md).
+The fixes in `60b23b7` were made after the reviews of `42faa18`; R9 reviewed them. R10 reviewed the R9 fixes (`9f31314`). **The R10 fixes (`8d8bd3f`) were made after R10 and have not been reviewed by Codex.** Their evidence is the tests named in [R10-codex.md](reviews/R10-codex.md).

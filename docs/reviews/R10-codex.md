@@ -8,7 +8,7 @@
 | Reviewed | `git diff 60b23b7 9f31314 -- src test` |
 | Prompt | [R10-codex.prompt.md](R10-codex.prompt.md) |
 
-R10 found 8 of the 11 R9 fixes complete, 3 partial, and 1 new defect. **The fixes below were made after R10, in commit FIX_COMMIT, and were not reviewed by Codex.**
+R10 found 8 of the 11 R9 fixes complete, 3 partial, and 1 new defect. **The fixes below were made after R10, in commit `8d8bd3f`, and were not reviewed by Codex.**
 
 ## Triage
 
