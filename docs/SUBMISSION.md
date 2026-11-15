@@ -13,7 +13,7 @@ Status: **not submitted.** The owner fills in and sends the DOO form. Only the f
 | One-line description | An agent's bulk data change runs for real inside a rollback-only PostgreSQL transaction; every direct and indirect row change is measured, unsafe plans are blocked and narrowed, and only a human-approved plan bound to its exact evidence executes, under a verifier that rolls back anything the simulation did not predict. |
 | Repository | https://github.com/abuzaro21/sounding |
 | Release | https://github.com/abuzaro21/sounding/releases/tag/v1.0.0 |
-| Live demo | _pending: see [DEPLOY](DEPLOY.md#status)_ |
+| Live demo | https://sounding.onrender.com (free tier: the first request after idle takes about a minute) |
 | Video (YouTube, Unlisted) | _pending: owner uploads `sounding-film.mp4` from the v1.0.0 release (SHA-256 `631d5f4e4a379a7cc490bb4ca54c3e64ef208e971d20d99461bcbf99169c5f4b`)_ |
 | Thesis | [THESIS.md](THESIS.md) (≤ 300 words) |
 | AI disclosure | [AI-DISCLOSURE.md](AI-DISCLOSURE.md) |
@@ -29,14 +29,12 @@ Status: **not submitted.** The owner fills in and sends the DOO form. Only the f
 ## What a judge can verify in five minutes
 
 1. Open the live demo, or run `npm run db:up && npm run build && npm start` locally.
-2. Follow the eight steps in the [README](../README.md#what-you-see-in-the-demo). Press **Reset** at any time.
-3. Read a receipt: every check, the digests, the effect count.
-4. Run the eval: `npm run eval`. The numbers must equal [evidence/eval.json](evidence/eval.json).
+1. Follow the eight steps in the [README](../README.md#what-you-see-in-the-demo). Press **Reset** at any time.
+2. Read a receipt: every check, the digests, the effect count.
+3. Run the eval: `npm run eval`. The numbers must equal [evidence/eval.json](evidence/eval.json).
 
 ## Owner-only actions
 
-1. Create a Render workspace for SOUNDING that holds no other application, and connect it ([DEPLOY](DEPLOY.md)).
-2. Approve making the repository public, and the v1.0.0 release.
-3. Watch and listen to the film end to end; then upload it to YouTube as **Unlisted**.
-4. Submit the DOO form; record the confirmation here.
-5. Before the free database expires: the continuity steps in [DEPLOY](DEPLOY.md#database-continuity).
+1. Watch and listen to the film end to end; then upload it to YouTube as **Unlisted**.
+2. Submit the DOO form; record the confirmation here.
+3. Before the free database expires on **2026-12-15 21:47 UTC**: the continuity steps in [DEPLOY](DEPLOY.md#database-continuity).

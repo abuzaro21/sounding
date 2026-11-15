@@ -23,7 +23,11 @@ check('session cookie is HttpOnly, SameSite=Strict', /HttpOnly; SameSite=Strict/
 check('security headers', /frame-ancestors 'none'/.test(s.headers.get('content-security-policy') ?? '') && s.headers.get('x-content-type-options') === 'nosniff');
 check('mutation without the CSRF header is refused', (await call('POST', '/api/reset', {}, false)).status === 403);
 const sql = await call('POST', '/api/actions', { intent: 'DELETE FROM customers; DROP TABLE orders' });
-check('SQL is not an accepted request', sql.status === 422, sql.body.message);
+// On Render, Cloudflare's edge firewall may refuse this payload (403, HTML) before it reaches the app; either layer refusing is a pass, and the detail says which.
+const edge = sql.status === 403 && sql.headers.get('server') === 'cloudflare';
+check('SQL is not an accepted request', sql.status === 422 || edge, edge ? 'refused by the edge firewall before the app' : sql.body.message);
+const sql2 = await call('POST', '/api/actions', { intent: 'please DELETE FROM customers' });
+check('the app itself refuses SQL it receives', sql2.status === 422, sql2.body.message);
 
 const a = await call('POST', '/api/actions', { intent: 'Remove inactive customer accounts older than 18 months' });
 const s1 = await call('POST', `/api/actions/${a.body.id}/simulate`);

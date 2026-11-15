@@ -34,7 +34,17 @@ The free web service sleeps when idle; the first request after a sleep takes abo
 
 ### Status
 
-Not deployed yet. The Render workspaces this session can reach already hold other applications (each with its free database), so none of them may be used. **Owner action:** create a new Render workspace (or account) for SOUNDING and connect it, then steps 2–5 run. The live URL and the database expiry are recorded here once they exist.
+**Live: https://sounding.onrender.com** (deployed 2026-11-15).
+
+| | |
+|---|---|
+| Workspace | `sounding`, a Render workspace that holds nothing else |
+| Blueprint | `exs-dbt2h5u7bikc73crueag`, auto-sync off |
+| Web service | `srv-dbt2h78ae00c739fn9sg`, free, Docker, Oregon |
+| Database | `dpg-dbt2gvl6e07s73b88u6g-a`, free PostgreSQL 16, internal connections only (`ipAllowList: []`) |
+| **Database expires** | **2026-12-15 21:47 UTC**, the same day as the DOO deadline. Run the continuity steps below before then |
+
+`node scripts/live-check.ts https://sounding.onrender.com`: 19/19. Render's Cloudflare edge refuses the `DROP TABLE` probe with 403 before it reaches the app; a milder SQL string reaches the app, which refuses it with 422. Both are checked.
 
 ## Database continuity
 
