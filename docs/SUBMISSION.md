@@ -11,8 +11,8 @@ Status: **not submitted.** The owner fills in and sends the DOO form. Only the f
 | Project name | SOUNDING |
 | Tagline | See the consequences before they become real. |
 | One-line description | An agent's bulk data change runs for real inside a rollback-only PostgreSQL transaction; every direct and indirect row change is measured, unsafe plans are blocked and narrowed, and only a human-approved plan bound to its exact evidence executes, under a verifier that rolls back anything the simulation did not predict. |
-| Repository | _pending: github.com/abuzaro21/sounding_ |
-| Release | _pending: v1.0.0_ |
+| Repository | https://github.com/abuzaro21/sounding |
+| Release | https://github.com/abuzaro21/sounding/releases/tag/v1.0.0 |
 | Live demo | _pending: see [DEPLOY](DEPLOY.md#status)_ |
 | Video (YouTube, Unlisted) | _pending: owner uploads `sounding-film.mp4` from the v1.0.0 release (SHA-256 `631d5f4e4a379a7cc490bb4ca54c3e64ef208e971d20d99461bcbf99169c5f4b`)_ |
 | Thesis | [THESIS.md](THESIS.md) (≤ 300 words) |
